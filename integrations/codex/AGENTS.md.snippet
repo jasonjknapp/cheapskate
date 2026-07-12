@@ -1,0 +1,55 @@
+<!--
+  Paste this block into your AGENTS.md (project root, or ~/.codex/AGENTS.md for all projects).
+  It tells Codex WHEN and HOW to offload cheap/bulk work to cheapskate via the run_task MCP tool.
+  Requires the cheapskate MCP server registered (see config.toml.snippet in this folder).
+-->
+
+## Token-saving offload to cheapskate
+
+A cheapskate MCP server is registered. It provides two tools:
+
+- `run_task(task_type, criteria, payload)`: routes ONE subtask to the cheapest model that clears
+  the acceptance criteria (local first, cloud only on escalation), verifies and repairs the result,
+  and returns `route` (local|cloud|refused), `ok`, `retries`, `escalated`, and `output`.
+- `econ_report(month?)`: the monthly savings receipt.
+
+**Offload the bulk work; keep your tokens for judgement.** When a subtask is high-volume and
+low-judgement, call `run_task` with explicit acceptance criteria instead of doing it yourself:
+
+- drafting (commit messages, docstrings, changelog entries, boilerplate prose)
+- classification and labeling
+- extraction (fields/values out of a blob into a shape)
+- summarization of long files or logs
+- first-pass code review (you then sanity-check the findings)
+- boilerplate code (repetitive scaffolding, test stubs)
+
+Reserve your own reasoning for architecture, planning, final review, and synthesis.
+
+**Always verify.** A `run_task` result is a draft. Check `output` against the `criteria` you sent
+before you use it. If `ok` is false or `route` is `refused`, discard it.
+
+**Never offload these.** `financial`, `legal`, `medical`, and `credentials` are `never_local` and
+cheapskate refuses them by design. Never route money, legal, medical, or secret-handling work
+through `run_task` to save tokens; do it yourself.
+
+### Examples
+
+Summarize a long log for the user:
+
+```
+run_task(
+  task_type="summarize",
+  criteria="Five bullet points max. Lead with the root cause if there is an error. No filler.",
+  payload="<the log contents>"
+)
+```
+
+Generate test-stub boilerplate:
+
+```
+run_task(
+  task_type="boilerplate",
+  criteria="One pytest test function per public method listed, each with an arrange/act/assert skeleton and a TODO for the assertion. Valid Python only.",
+  payload="<the class source or method list>"
+)
+```

@@ -168,6 +168,19 @@ cheapskate report --share  # a content-free aggregate receipt, safe to post publ
 `--share` reads **only** numeric aggregates, model ids, and your machine id. It never touches a
 free-text field, pinned by test so a poisoned telemetry line can't leak into a public receipt.
 
+## Default models + auto-download
+
+Cheapskate ships a **suggested model per role** (a sane starting fleet matched to a roughly 128GB
+Apple-Silicon profile), so `cheapskate models list` and `cheapskate econ` render on a fresh install
+instead of blank. Each row is marked `"source": "default"` until you pick your own. The first time a
+role is actually served and its selected **Ollama** model is not yet pulled, cheapskate fetches it on
+demand (`ollama pull`), **gated by the same fail-closed disk/size/RAM budget** as model currency: a
+download that would breach disk headroom or the RAM budget is refused, never forced. These are only
+suggestions: set `roles:` in `config.yaml` (or promote via the currency engine) to override any of
+them, and set `machine.auto_pull: false` to require a manual `ollama pull` (e.g. on a metered
+connection). MLX models are not auto-fetched yet (an HF snapshot is more involved than a one-liner);
+doctor tells you which defaults are pulled vs not.
+
 ## Eval-gated model currency
 
 New local models ship constantly. Cheapskate can auto-discover them (Hugging Face) but only
@@ -207,6 +220,12 @@ the repo.
   (a code assistant, an agent CLI; needs the `mcp` extra).
 - **Python API.** `cheapskate.client.complete()` / `generate_json()` go through the broker with
   graceful degradation.
+
+**Drop-in kits.** Copy-pasteable offload kits for Claude Code, Gemini CLI, Codex, and any
+OpenAI-compatible tool live in [`integrations/`](integrations/): MCP server registrations plus
+paste-in instruction snippets that teach the expensive agent to hand its cheap, bulk subtasks
+(drafting, classification, extraction, first-pass review, boilerplate) to cheapskate and keep its
+own tokens for judgement.
 
 ## Multi-machine
 
