@@ -14,7 +14,6 @@ from typing import Any
 
 from . import config as _config
 from . import paths
-from . import telemetry
 from .registry import registry as _registry
 from .router import dial as _dial
 from .router import routes as _routes
@@ -149,64 +148,80 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── eval ─────────────────────────────────────────────────────────────────────
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    """Run the shipped deterministic eval set for a role (or the whole set).
+
+    Injected mode (default) runs a canned offline ``complete`` — no model, no
+    network — so a stranger can prove the harness scores green from a bare clone
+    and CI can gate on it. ``--live`` binds the real broker client so the same
+    set gates an actual model. The exit code is the gate: 0 iff every CRITICAL
+    task passed.
+    """
+    from .evals import run_eval_set
+    from .evals.runner import perfect_complete
+
+    if args.live:
+        from . import client as _client
+
+        cfg = _config.load()
+
+        def complete(prompt: str, *, system=None, role=None, model=None) -> str:
+            return _client.complete(
+                prompt, system=system, role=role, model=model, config=cfg
+            )["text"]
+    else:
+        complete = perfect_complete()
+
+    summary = run_eval_set(complete, role=args.role, model=args.model)
+    mode = "live" if args.live else "injected"
+    gate_ok = summary["critical_passed"] == summary["critical_total"]
+    _print(
+        {
+            "mode": mode,
+            "role": args.role or "all",
+            "model": args.model,
+            "pass_rate": round(summary["pass_rate"], 3),
+            "passed": summary["passed"],
+            "total": summary["total"],
+            "critical_passed": summary["critical_passed"],
+            "critical_total": summary["critical_total"],
+            "gate": "PASS" if gate_ok else "FAIL",
+            "results": summary["results"],
+        }
+    )
+    return 0 if gate_ok else 1
+
+
 # ── doctor ───────────────────────────────────────────────────────────────────
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Minimal v0.1 health check: config parses, dirs writable, backends reachable
-    (or reported)."""
-    checks: list[dict[str, Any]] = []
-    ok_all = True
+    """Full preflight: config parses + effective paths; dirs writable; python/dep
+    versions; registry roles; serving engines present/reachable (report, never
+    fail on a bare machine); telemetry writable; pricing feed age.
 
-    # config parses
-    try:
-        cfg = _config.load()
-        checks.append({"check": "config", "ok": True})
-    except Exception as exc:  # noqa: BLE001
-        checks.append({"check": "config", "ok": False, "error": f"{type(exc).__name__}: {exc}"})
-        _print({"ok": False, "checks": checks})
-        return 1
+    Prints a PASS/WARN/FAIL table (or ``--json`` for the raw checks). Exits 0
+    unless something genuinely broke — a missing serving engine is a WARN, so a
+    fresh clone with nothing running still exits 0."""
+    from . import doctor as _doctor
 
-    # dirs writable
-    for name, d in (("config_dir", paths.config_dir()), ("state_dir", paths.state_dir())):
-        try:
-            probe = d / ".cheapskate-doctor-probe"
-            probe.write_text("ok")
-            probe.unlink()
-            checks.append({"check": name, "ok": True, "path": str(d)})
-        except Exception as exc:  # noqa: BLE001
-            ok_all = False
-            checks.append({"check": name, "ok": False, "path": str(d), "error": str(exc)})
-
-    # telemetry is content-free (writes an event; the writer enforces it)
-    try:
-        telemetry.log_event("doctor", ok=True)
-        checks.append({"check": "telemetry", "ok": True})
-    except Exception as exc:  # noqa: BLE001
-        ok_all = False
-        checks.append({"check": "telemetry", "ok": False, "error": str(exc)})
-
-    # backend endpoints reachable-or-reported (never fails doctor: just reports)
-    for name, entry in cfg.backends.items():
-        if not entry.enabled or not entry.url:
-            checks.append({"check": f"backend:{name}", "ok": None, "note": "disabled or no url"})
-            continue
-        checks.append({"check": f"backend:{name}", **_probe_url(entry.url)})
-
-    _print({"ok": ok_all, "checks": checks})
-    return 0 if ok_all else 1
-
-
-def _probe_url(url: str) -> dict[str, Any]:
-    """Report reachability of a backend URL. Never raises; a down backend is
-    reported, not fatal."""
-    try:
-        import httpx
-
-        resp = httpx.get(url, timeout=2.0)
-        return {"ok": True, "reachable": True, "url": url, "status": resp.status_code}
-    except Exception as exc:  # noqa: BLE001 — unreachable is reported, not an error
-        return {"ok": None, "reachable": False, "url": url, "error": type(exc).__name__}
+    checks, exit_code = _doctor.run_doctor()
+    if getattr(args, "json", False):
+        _print(
+            {
+                "ok": exit_code == 0,
+                "checks": [
+                    {"check": c.name, "status": c.status, "detail": c.detail, **c.extra}
+                    for c in checks
+                ],
+            }
+        )
+    else:
+        print(_doctor.render_table(checks))
+    return exit_code
 
 
 # ── econ ─────────────────────────────────────────────────────────────────────
@@ -300,7 +315,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("serve", help="run the broker daemon (needs broker deps)")
     sub.add_parser("mcp", help="run the stdio MCP server (needs the 'mcp' extra)")
-    sub.add_parser("doctor", help="check config, dirs, and backend reachability")
+
+    doc = sub.add_parser("doctor", help="full preflight (config, dirs, versions, engines, pricing)")
+    doc.add_argument("--json", action="store_true", help="emit raw checks as JSON instead of a table")
+
+    ev = sub.add_parser("eval", help="run the shipped deterministic eval set (quality gate)")
+    ev.add_argument("--role", default=None, help="restrict to one role (reasoning|classification|code)")
+    ev.add_argument("--model", default=None, help="concrete model tag to pin (live mode)")
+    ev.add_argument(
+        "--live", action="store_true",
+        help="run through the real broker client (default: injected offline mode)",
+    )
 
     e = sub.add_parser("econ", help="per-task-type routing recommendation table")
     e.add_argument("--month", default=None, help="restrict to a month (YYYY-MM)")
@@ -337,6 +362,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_mcp(args)
     if args.cmd == "doctor":
         return _cmd_doctor(args)
+    if args.cmd == "eval":
+        return _cmd_eval(args)
     if args.cmd == "econ":
         return _cmd_econ(args)
     if args.cmd == "report":

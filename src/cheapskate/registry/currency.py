@@ -248,6 +248,48 @@ def evaluate(
     return plan
 
 
+# ── eval-gated orchestration (runnable from a bare clone) ────────────────────
+
+
+def evaluate_with_harness(
+    role: str,
+    candidate: str,
+    registry: dict[str, Any],
+    *,
+    complete: Callable[..., str],
+    fits: bool = True,
+    fit_reason: str = "within budget",
+    candidate_size_gb: float | None = None,
+    quarantined_ok: bool = False,
+    critical_floor: float = 1.0,
+    margin: float = 0.0,
+    eval_set: Any = None,
+) -> dict[str, Any]:
+    """Evaluate ``candidate`` against ``role``'s incumbent using the SHIPPED eval
+    harness as the gate — the end-to-end entry point that makes eval-gated
+    promotion runnable from a bare clone with no bespoke ``eval_fn``/``decision_fn``.
+
+    ``complete`` is the injectable model call the harness drives (a fake in tests,
+    ``cheapskate.client.complete`` for a live gate). This function binds
+    :func:`cheapskate.evals.make_eval_fn` and
+    :func:`cheapskate.evals.decision_from_evals` and delegates to :func:`evaluate`,
+    so the fail-closed pre-download gate (``fits``) and quarantine checks still
+    apply exactly as before. Returns the same plan dict :func:`evaluate` returns.
+    """
+    # Lazy import: the currency engine must import without the evals package
+    # pulling in anything heavy, and tests can still call :func:`evaluate` directly.
+    from ..evals import decision_from_evals, make_eval_fn
+
+    eval_fn = make_eval_fn(complete, eval_set=eval_set)
+    decision_fn = decision_from_evals(critical_floor=critical_floor, margin=margin)
+    return evaluate(
+        role, candidate, registry,
+        eval_fn=eval_fn, decision_fn=decision_fn,
+        fits=fits, fit_reason=fit_reason,
+        candidate_size_gb=candidate_size_gb, quarantined_ok=quarantined_ok,
+    )
+
+
 # ── promote / rollback (delegate to the registry's atomic swap) ──────────────
 
 

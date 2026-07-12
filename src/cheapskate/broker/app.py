@@ -16,6 +16,19 @@ import asyncio
 import time
 from typing import Any
 
+# ``Request`` must be resolvable in THIS module's globals at route-registration
+# time: with ``from __future__ import annotations`` a route's ``request: Request``
+# annotation is stored as the string ``"Request"``, and FastAPI resolves it via
+# ``get_type_hints`` against the handler's ``__globals__`` (i.e. this module).
+# A function-LOCAL ``from fastapi import Request`` is invisible there, so the
+# framework mistakes ``request`` for a required query param (HTTP 422 on every
+# request). Binding it at module scope fixes that. The import is guarded so the
+# module still imports (for the stdlib-only unit tests) when FastAPI is absent.
+try:  # pragma: no cover - exercised via the integration smoke, not unit tests
+    from fastapi import Request as Request  # noqa: PLC0414 - re-export for annotations
+except Exception:  # noqa: BLE001 - FastAPI is optional at import time
+    Request = Any  # type: ignore[assignment,misc]
+
 from ..backends import (
     LocalUnavailable,
     lms_loaded,
@@ -320,10 +333,19 @@ def build_app(config: Any = None):
     """
     from contextlib import asynccontextmanager
 
-    from fastapi import FastAPI, Request, Response
+    from fastapi import FastAPI, Response
     from fastapi.responses import JSONResponse
     from starlette.background import BackgroundTask
     import httpx
+
+    # ``Request`` is bound at module scope (see the top-of-file note) so the route
+    # annotations resolve; a local re-import here would re-break annotation
+    # resolution. Reference the module-level name.
+    global Request
+    if Request is Any:  # module imported before FastAPI was available
+        from fastapi import Request as _Req
+
+        Request = _Req  # type: ignore[assignment,misc]
 
     if config is None:
         from cheapskate.config import load  # provided by the config owner

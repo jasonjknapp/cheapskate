@@ -11,6 +11,22 @@ from cheapskate.cloud import CloudError, adapters
 from cheapskate.config import Config, ProviderConfig
 
 
+def _has(mod: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(mod) is not None
+
+
+# These two cases exercise the REAL SDK client-construction path (no injected
+# client), so they only make sense when the SDK extra is installed. A bare
+# ``pip install -e .[dev]`` (no optional extras) skips them; CI installs the
+# extras so they still run there. Every other test in this file injects a fake
+# client and needs no SDK.
+requires_openai = pytest.mark.skipif(
+    not _has("openai"), reason="needs the 'openai' extra (pip install 'cheapskate[openai]')"
+)
+
+
 # ── fake SDK clients (injected) ──────────────────────────────────────────────
 
 
@@ -142,6 +158,7 @@ def test_selection_is_deterministic_sorted_by_name():
 # ── secrets are env-only ─────────────────────────────────────────────────────
 
 
+@requires_openai
 def test_missing_api_key_env_is_hard_error(monkeypatch):
     monkeypatch.delenv("EXAMPLE_KEY", raising=False)
     cfg = _cfg(cloud=_openai_provider())
@@ -151,6 +168,7 @@ def test_missing_api_key_env_is_hard_error(monkeypatch):
     assert "EXAMPLE_KEY" in str(e.value)
 
 
+@requires_openai
 def test_no_api_key_env_configured_is_hard_error():
     prov = ProviderConfig(kind="openai-compat", model_map={"reasoning": "m"},
                           api_key_env=None, enabled=True)

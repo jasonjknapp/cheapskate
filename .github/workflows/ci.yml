@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Continuous integration: lint + test + a bare-machine doctor + injected fixture
+# evals, on a Python 3.11/3.12 matrix. The runner has NO serving engines
+# (ollama/mlx) and NO cloud keys — which is the point: doctor must WARN-pass and
+# the evals run in injected (offline) mode. No network is used beyond pip.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (editable, all extras so optional-feature tests run)
+        run: |
+          python -m pip install --upgrade pip
+          # [dev] is a bare clone's one install step (pins the TestClient-safe
+          # fastapi/starlette range + pytest + ruff). CI additionally installs the
+          # optional extras (mcp/openai/anthropic) so their integration tests
+          # actually execute here instead of skipping. No network beyond pip.
+          pip install -e ".[dev,mcp,openai,anthropic]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test (pytest — no network, no live servers)
+        run: pytest tests/ -q
+
+      - name: Doctor (must WARN-pass on a runner with no serving engines)
+        run: |
+          # The runner has no ollama/mlx and no cloud keys. Doctor must still
+          # exit 0 — missing engines are WARNs, never a FAIL. A non-zero exit
+          # here means the bare-machine contract regressed.
+          cheapskate doctor
+
+      - name: Fixture evals (injected offline mode — the quality gate)
+        run: |
+          # Injected mode drives a canned offline `complete`, so no model and no
+          # network are needed. A non-zero exit means a shipped fixture's
+          # deterministic check regressed.
+          cheapskate eval

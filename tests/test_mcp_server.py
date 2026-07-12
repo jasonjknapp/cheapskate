@@ -9,8 +9,13 @@ import asyncio
 
 import pytest
 
-from cheapskate import mcp_server
-from cheapskate.config import Config
+# The MCP server needs the optional ``mcp`` extra. A bare ``pip install -e .[dev]``
+# omits it, so skip this whole module cleanly there; CI installs the extra so
+# these tests still run in the pipeline.
+pytest.importorskip("mcp", reason="needs the 'mcp' extra (pip install 'cheapskate[mcp]')")
+
+from cheapskate import mcp_server  # noqa: E402
+from cheapskate.config import Config  # noqa: E402
 
 
 def test_build_server_registers_two_tools():

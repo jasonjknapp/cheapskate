@@ -15,9 +15,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "fastapi>=0.115",
+    # fastapi/starlette are pinned to a range whose TestClient correctly resolves
+    # a route's ``request: Request`` parameter under ``from __future__ import
+    # annotations`` (S3 finding). Starlette 1.x also re-resolves the annotation via
+    # get_type_hints, so the same range holds; the floor guarantees the fix in
+    # broker/app.py (module-scope Request binding) is exercised against a version
+    # that both resolves Request AND ships a working TestClient. Verified: fastapi
+    # 0.116.1 + starlette 0.41.3 and fastapi 0.139 + starlette 1.3.1.
+    "fastapi>=0.116,<1.0",
+    "starlette>=0.40,<2.0",
     "uvicorn>=0.30",
-    "httpx>=0.27",
+    "httpx>=0.27,<1.0",
     "pydantic>=2.7",
     "pyyaml>=6.0",
 ]
@@ -26,6 +34,10 @@ dependencies = [
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
 mcp = ["mcp>=1.0"]
+# Test + dev tooling as an INSTALLABLE extra so a bare clone can run
+# ``pip install -e .[dev]`` and get a green suite + lint without a separate
+# dependency manager. Mirrors the [dependency-groups] dev set for uv users.
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 cheapskate = "cheapskate.cli:main"
@@ -49,3 +61,11 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # Starlette 1.x emits this from its TestClient shim when paired with httpx<2;
+    # it is a serving-layer note, not a defect in our code, and does not appear
+    # under the pinned lower-bound (starlette 0.41.x). Silence it so the suite
+    # reads clean across the supported version range.
+    "ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient`:UserWarning",
+]
