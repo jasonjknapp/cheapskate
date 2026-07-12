@@ -3,14 +3,14 @@
 
 Two runtimes can hold Metal-resident models alongside the MLX server:
 
-  * **Ollama** — the daemon that auto-loads GGUF/quantized models on demand and
+  * **Ollama**, the daemon that auto-loads GGUF/quantized models on demand and
     LRU-evicts its own; and
   * a **secondary desktop runtime** (LM Studio, addressed via its ``lms`` CLI)
     that a co-user may have loaded models into.
 
 Before a large MLX load, the preflight accounts for both so the combined
 footprint never breaches the RAM budget. The secondary runtime is preempted
-ONLY under memory pressure — coexistence is the default; eviction happens only
+ONLY under memory pressure, coexistence is the default; eviction happens only
 when it is actually needed.
 
 Every probe is best-effort and never raises: an unknown footprint reads as 0.0
@@ -43,7 +43,7 @@ def _sum_gb(text: str) -> float:
 def ollama_resident_gb(runner: Optional[Callable[[], str]] = None) -> float:
     """GB currently Metal-resident in the Ollama daemon (via ``ollama ps``).
 
-    Never raises; unknown reads as 0.0 (fail-open — Ollama self-evicts LRU; the
+    Never raises; unknown reads as 0.0 (fail-open, Ollama self-evicts LRU; the
     hard stop is the post-eviction re-check).
     """
     try:
@@ -83,6 +83,48 @@ def ollama_model_resident(model: str, runner: Optional[Callable[[], str]] = None
             for ln in (out or "").splitlines()[1:]
         )
     except Exception:  # noqa: BLE001
+        return False
+
+
+def ollama_model_present(model: str, runner: Optional[Callable[[], str]] = None) -> bool:
+    """True if ``model`` is PULLED (installed on disk, via ``ollama list``).
+
+    Distinct from :func:`ollama_model_resident`, which checks whether the model
+    is currently loaded in RAM (``ollama ps``). Never raises; any error reads as
+    "not present" (fail-closed for the "should I pull?" decision)."""
+    try:
+        out = (runner or (lambda: subprocess.run(
+            ["ollama", "list"], capture_output=True, text=True, timeout=10).stdout))()
+        base = (model or "").split(":")[0]
+        return any(
+            base and ln.split() and ln.split()[0].split(":")[0] == base
+            for ln in (out or "").splitlines()[1:]
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def ollama_pull(
+    model: str,
+    *,
+    runner: Optional[Callable[[list[str]], "subprocess.CompletedProcess[str]"]] = None,
+    timeout: float = 3600.0,
+) -> bool:
+    """Pull ``model`` via ``ollama pull <model>`` (fetch-on-demand). Returns True
+    on success, False on any failure, NEVER raises, so the caller fails closed
+    (raises LocalUnavailable) rather than the exception escaping the preflight.
+
+    ``runner`` is injectable for tests (takes the argv list, returns a
+    ``CompletedProcess``); the default streams ``ollama``'s own progress to the
+    inherited stdout/stderr so a large download is visible."""
+    argv = ["ollama", "pull", model]
+    try:
+        if runner is not None:
+            proc = runner(argv)
+            return getattr(proc, "returncode", 1) == 0
+        proc = subprocess.run(argv, timeout=timeout)  # inherit stdio → live progress
+        return proc.returncode == 0
+    except Exception:  # noqa: BLE001, a failed pull is False, never an exception
         return False
 
 

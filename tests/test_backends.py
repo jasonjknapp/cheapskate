@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pins backend resolution + the single-large-model lifecycle + cross-runtime
 eviction. Uses the injection points (launcher, port_checker, foreign_check,
-binary_exists, evict, runner) — no real processes, sockets, or sleeps."""
+binary_exists, evict, runner), no real processes, sockets, or sleeps."""
 
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def test_ensure_mlx_evict_is_called_before_load(monkeypatch):
         launcher=lambda m, p: (order.append("launch"), 7)[1],
         port_checker=lambda p: False, binary_exists=lambda: True,
     )
-    # Foreign guard, then eviction, then launch — the load-bearing order.
+    # Foreign guard, then eviction, then launch, the load-bearing order.
     assert order == ["foreign", ("evict", 40.0), "launch"]
 
 
@@ -210,7 +210,7 @@ def test_evict_noop_when_everything_fits():
         ollama_stop=lambda: calls.append("ollama"),
         sleep=lambda s: None,
     )
-    assert calls == []  # nothing evicted — everything coexists
+    assert calls == []  # nothing evicted, everything coexists
 
 
 def test_evict_secondary_runtime_first_under_pressure():
@@ -270,3 +270,224 @@ def test_ollama_model_resident_matches_base_name():
 def test_lms_loaded_detects_no_models():
     assert ollamamod.lms_loaded(runner=lambda: "No models loaded") is False
     assert ollamamod.lms_loaded(runner=lambda: "model-x 8 GB") is True
+
+
+def test_ollama_model_present_reads_ollama_list():
+    fake_list = "NAME\t\tID\t\tSIZE\nqwen3-coder:30b\tabc\t18 GB\n"
+    assert ollamamod.ollama_model_present("qwen3-coder", runner=lambda: fake_list) is True
+    assert ollamamod.ollama_model_present("mistral", runner=lambda: fake_list) is False
+
+
+# ── ollama_pull (injected runner) ───────────────────────────────────────────
+
+
+def test_ollama_pull_success_path():
+    class _Proc:
+        returncode = 0
+
+    calls = []
+
+    def runner(argv):
+        calls.append(argv)
+        return _Proc()
+
+    assert ollamamod.ollama_pull("qwen3-coder:30b", runner=runner) is True
+    assert calls == [["ollama", "pull", "qwen3-coder:30b"]]
+
+
+def test_ollama_pull_failure_returns_false_never_raises():
+    class _Proc:
+        returncode = 1
+
+    assert ollamamod.ollama_pull("m:tag", runner=lambda argv: _Proc()) is False
+
+
+def test_ollama_pull_exception_is_swallowed_to_false():
+    def boom(argv):
+        raise RuntimeError("network down")
+
+    # never raises, the caller fails closed on False
+    assert ollamamod.ollama_pull("m:tag", runner=boom) is False
+
+
+# ── default suggested roles ──────────────────────────────────────────────────
+
+
+def test_default_roles_shape():
+    from cheapskate.registry import registry as reg
+
+    dr = reg.default_roles()
+    assert set(dr) == {"reasoning", "code", "classification", "creative"}
+    for role, rc in dr.items():
+        assert rc["model"] and isinstance(rc["model"], str)
+        assert rc["backend"] in ("ollama", "mlx")
+        assert isinstance(rc["approx_gb"], float) and rc["approx_gb"] > 0
+    # the specific reference fleet is shipped
+    assert dr["code"]["model"] == "qwen3-coder:30b"
+    assert dr["classification"]["backend"] == "mlx"
+
+
+def test_resolve_falls_back_to_default_when_config_and_registry_empty():
+    # No config.roles, empty registry (conftest points XDG at a temp dir) → the
+    # shipped default resolves.
+    spec = resolve(role="code", config={"roles": {}})
+    assert spec.model == "qwen3-coder:30b"
+    assert spec.backend == "ollama"
+    assert spec.approx_gb == 18.0
+
+
+def test_config_role_overrides_default():
+    cfg = {"roles": {"code": {"model": "me/mycoder", "backend": "mlx", "approx_gb": 12}}}
+    spec = resolve(role="code", config=cfg)
+    assert spec.model == "me/mycoder"  # user config wins over the default
+    assert spec.backend == "mlx"
+
+
+def test_registry_role_overrides_default(tmp_path, monkeypatch):
+    # A promoted registry entry wins over the shipped default for that role.
+    from cheapskate.registry import registry as reg
+
+    p = tmp_path / "registry.yaml"
+    r = reg.load(path=p)
+    reg.set_incumbent(r, "code", "org/promoted-coder", "ollama", approx_gb=20.0)
+    reg.save(r, path=p)
+    monkeypatch.setattr(reg, "_registry_path", lambda path=None: p)
+
+    spec = resolve(role="code", config={"roles": {}})
+    assert spec.model == "org/promoted-coder"
+
+
+def test_role_sources_marks_provenance(tmp_path, monkeypatch):
+    from cheapskate.backends.resolve import role_sources
+    from cheapskate.registry import registry as reg
+
+    p = tmp_path / "registry.yaml"
+    r = reg.load(path=p)
+    reg.set_incumbent(r, "reasoning", "org/promoted", "ollama", approx_gb=30.0)
+    reg.save(r, path=p)
+    monkeypatch.setattr(reg, "_registry_path", lambda path=None: p)
+
+    cfg = {"roles": {"code": {"model": "me/mine", "backend": "ollama"}}}
+    src = role_sources(cfg)
+    assert src["code"] == "config"  # config wins
+    assert src["reasoning"] == "registry"  # promoted incumbent
+    assert src["classification"] == "default"  # still just a suggestion
+    assert src["creative"] == "default"
+
+
+# ── ensure_role auto-pull (ensure-present-or-pull), gate reused ──────────────
+
+_OLLAMA_ROLE_CFG = {
+    "roles": {"code": {"model": "org/coder:30b", "backend": "ollama", "approx_gb": 18.0}},
+    "machine": {"ram_headroom_gb": 24.0, "disk_headroom_gb": 15.0, "auto_pull": True},
+}
+
+
+def test_ensure_role_pulls_when_absent_and_gate_ok(monkeypatch):
+    # Not resident, not present → gate OK (18GB fits) → pull once → then present.
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: False)
+    presence = {"present": False}
+    pulls = []
+
+    def model_present(_m):
+        return presence["present"]
+
+    def pull(_m):
+        pulls.append(_m)
+        presence["present"] = True
+        return True
+
+    spec = pf.ensure_role(
+        role="code", config=_OLLAMA_ROLE_CFG, budget_gb=100.0,
+        pull=pull, model_present=model_present,
+        free_disk=lambda: 500.0, log=lambda *_: None,
+    )
+    assert spec.model == "org/coder:30b"
+    assert pulls == ["org/coder:30b"]  # pulled exactly once
+
+
+def test_ensure_role_gate_refuses_too_big_no_pull(monkeypatch):
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: False)
+    pulls = []
+    # approx 18GB but a tiny RAM budget (10GB) → gate refuses on RAM.
+    with pytest.raises(LocalUnavailable) as e:
+        pf.ensure_role(
+            role="code", config=_OLLAMA_ROLE_CFG, budget_gb=10.0,
+            pull=lambda m: pulls.append(m) or True,
+            model_present=lambda _m: False,
+            free_disk=lambda: 500.0, log=lambda *_: None,
+        )
+    assert pulls == []  # never pulled
+    assert "gate" in str(e.value).lower()
+
+
+def test_ensure_role_gate_refuses_disk_headroom_no_pull(monkeypatch):
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: False)
+    pulls = []
+    # 18GB candidate but only 20GB free with 15GB headroom → 20-18 < 15 → refuse.
+    with pytest.raises(LocalUnavailable) as e:
+        pf.ensure_role(
+            role="code", config=_OLLAMA_ROLE_CFG, budget_gb=100.0,
+            pull=lambda m: pulls.append(m) or True,
+            model_present=lambda _m: False,
+            free_disk=lambda: 20.0, log=lambda *_: None,
+        )
+    assert pulls == []
+    assert "disk" in str(e.value).lower()
+
+
+def test_ensure_role_auto_pull_disabled_no_pull(monkeypatch):
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: False)
+    cfg = {
+        "roles": {"code": {"model": "org/coder:30b", "backend": "ollama", "approx_gb": 18.0}},
+        "machine": {"auto_pull": False},
+    }
+    pulls = []
+    with pytest.raises(LocalUnavailable) as e:
+        pf.ensure_role(
+            role="code", config=cfg, budget_gb=100.0,
+            pull=lambda m: pulls.append(m) or True,
+            model_present=lambda _m: False,
+            free_disk=lambda: 500.0,
+        )
+    assert pulls == []
+    assert "auto_pull" in str(e.value)
+
+
+def test_ensure_role_no_pull_when_already_present(monkeypatch):
+    # Pulled-on-disk (present) but not loaded → Ollama auto-loads; no pull needed.
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: False)
+    pulls = []
+    spec = pf.ensure_role(
+        role="code", config=_OLLAMA_ROLE_CFG, budget_gb=100.0,
+        pull=lambda m: pulls.append(m) or True,
+        model_present=lambda _m: True,  # already pulled
+        free_disk=lambda: 500.0,
+    )
+    assert spec.model == "org/coder:30b"
+    assert pulls == []  # nothing pulled
+
+
+def test_ensure_role_no_pull_when_resident(monkeypatch):
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: True)
+    pulls = []
+    spec = pf.ensure_role(
+        role="code", config=_OLLAMA_ROLE_CFG, budget_gb=100.0,
+        pull=lambda m: pulls.append(m) or True,
+        model_present=lambda _m: False,
+        free_disk=lambda: 500.0,
+    )
+    assert spec.model == "org/coder:30b"
+    assert pulls == []
+
+
+def test_ensure_role_pull_failure_raises(monkeypatch):
+    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: False)
+    with pytest.raises(LocalUnavailable) as e:
+        pf.ensure_role(
+            role="code", config=_OLLAMA_ROLE_CFG, budget_gb=100.0,
+            pull=lambda _m: False,  # gate OK but the download fails
+            model_present=lambda _m: False,
+            free_disk=lambda: 500.0, log=lambda *_: None,
+        )
+    assert "failed" in str(e.value).lower()

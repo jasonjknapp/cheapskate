@@ -2,7 +2,7 @@
 """``cheapskate doctor``: the contract is WARN-not-fail on a bare machine.
 
 The autouse ``_isolate_state`` fixture in conftest points XDG at a temp dir, so
-these tests exercise doctor exactly as a fresh clone would see it — no user
+these tests exercise doctor exactly as a fresh clone would see it, no user
 config, an empty registry, no serving engines guaranteed. Doctor must exit 0 and
 never crash."""
 
@@ -100,3 +100,35 @@ def test_engine_absence_never_raises(monkeypatch):
     monkeypatch.setattr(doctor.shutil, "which", lambda *_a, **_k: None)
     checks, exit_code = doctor.run_doctor()
     assert exit_code == 0
+
+
+def test_doctor_default_model_presence_warns_never_fails(monkeypatch):
+    # On a fresh box the suggested-default models are NOT pulled: report them as
+    # WARN (not-pulled), never FAIL. Force ollama_list to show nothing installed.
+    from cheapskate.backends import ollama as _ollama
+
+    monkeypatch.setattr(_ollama, "ollama_model_present", lambda *_a, **_k: False)
+    monkeypatch.setattr(doctor.shutil, "which", lambda *_a, **_k: None)
+
+    checks, exit_code = doctor.run_doctor()
+    assert exit_code == 0  # never a hard fail
+    model_checks = [c for c in checks if c.name.startswith("model:")]
+    assert model_checks, "expected per-default-role presence checks"
+    # every ollama default that is not pulled is a WARN with an actionable hint
+    ollama_warns = [c for c in model_checks if "not pulled" in c.detail]
+    assert ollama_warns
+    assert all(c.status == doctor.WARN for c in model_checks)
+
+
+def test_doctor_default_model_present_is_pass(monkeypatch):
+    from cheapskate.backends import ollama as _ollama
+
+    monkeypatch.setattr(_ollama, "ollama_model_present", lambda *_a, **_k: True)
+    monkeypatch.setattr(doctor.shutil, "which", lambda *_a, **_k: None)
+
+    checks, _ = doctor.run_doctor()
+    ollama_models = [
+        c for c in checks if c.name.startswith("model:") and "pulled (ollama)" in c.detail
+    ]
+    assert ollama_models
+    assert all(c.status == doctor.PASS for c in ollama_models)

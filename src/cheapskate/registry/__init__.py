@@ -18,6 +18,7 @@ from .currency import (
 )
 from .registry import (
     KEEP_ROLLBACK_N,
+    default_roles,
     get_role,
     incumbent,
     load,
@@ -37,6 +38,7 @@ __all__ = [
     "get_role",
     "incumbent",
     "set_incumbent",
+    "default_roles",
     "protected_models",
     "quarantine",
     "KEEP_ROLLBACK_N",

@@ -19,7 +19,7 @@ Writes are ATOMIC (temp file + ``os.replace``) so a crashed run never leaves a
 half-written registry. The registry lives in ``state_dir()`` (runtime data,
 gitignored) so it stays out of the repo.
 
-The incumbent, the fallback, and every retained rollback are the PROTECTED set —
+The incumbent, the fallback, and every retained rollback are the PROTECTED set ,
 :func:`protected_models` is what the currency engine consults before deleting
 anything.
 """
@@ -36,6 +36,28 @@ from .. import paths
 
 _REGISTRY_FILE = "registry.yaml"
 KEEP_ROLLBACK_N = 1  # rollbacks retained per role
+
+
+def default_roles() -> dict[str, dict[str, Any]]:
+    """Shipped SUGGESTED role -> model defaults (as data), fully overridable.
+
+    A fresh install has an empty ``registry.yaml`` and no ``roles:`` in
+    config.yaml, so the role table would render blank. These suggestions give a
+    sane starting fleet matched to a roughly 128GB Apple-Silicon profile (what
+    the author runs). They are ONLY a fallback: a user's own ``config.roles`` or
+    a promoted registry entry always wins (see ``resolve._roles``), and nothing
+    here is ever written to the registry or auto-downloaded on its own.
+
+    Each entry mirrors the registry role schema (``model``, ``backend``,
+    ``approx_gb``) so a default resolves through the exact same path a promoted
+    incumbent does.
+    """
+    return {
+        "reasoning": {"model": "gpt-oss:120b", "backend": "ollama", "approx_gb": 65.0},
+        "code": {"model": "qwen3-coder:30b", "backend": "ollama", "approx_gb": 18.0},
+        "classification": {"model": "qwen3.5:9b-mlx", "backend": "mlx", "approx_gb": 9.0},
+        "creative": {"model": "gemma-4-31b", "backend": "ollama", "approx_gb": 19.0},
+    }
 
 
 def _registry_path(path: Path | None = None) -> Path:
@@ -108,7 +130,7 @@ def set_incumbent(
     """Set ``role``'s incumbent to ``model``, retaining the previous incumbent as
     the newest rollback. Mutates and returns ``registry`` (caller persists via
     :func:`save`). Creating a role that does not exist is the sanctioned way to
-    register a new one — the registry stays engine-owned.
+    register a new one, the registry stays engine-owned.
     """
     roles = registry.setdefault("roles", {})
     rc = roles.setdefault(role, {})

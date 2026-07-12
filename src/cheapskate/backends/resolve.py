@@ -23,7 +23,7 @@ MLX_VLM_PORT = 8081
 class LocalUnavailable(Exception):
     """A local backend could not serve the request (down/missing/over-budget).
 
-    Callers degrade gracefully on this — they never silently fall back to a
+    Callers degrade gracefully on this, they never silently fall back to a
     cloud provider.
     """
 
@@ -57,7 +57,7 @@ def infer_backend(model: str) -> str:
 def default_endpoint(backend: str, config: Any = None) -> str:
     """Default OpenAI-compatible base URL for a backend.
 
-    A ``config.backends`` entry may override any of these — including a
+    A ``config.backends`` entry may override any of these, including a
     non-localhost URL for the multi-machine (remote) story.
     """
     endpoints = _config_backends(config)
@@ -90,15 +90,50 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
 
 
 def _roles(config: Any) -> dict:
-    """The role table: a ``roles`` section on the config wins (tests, embedders);
-    otherwise the runtime registry (``registry.yaml``) is the source of truth."""
-    roles = _get(config, "roles", {})
-    if isinstance(roles, dict) and roles:
-        return roles
+    """The effective role table, layered by precedence (highest wins, per role):
+
+      1. ``config.roles``, an explicit user/test override.
+      2. the runtime registry (``registry.yaml``), promoted incumbents.
+      3. shipped SUGGESTED defaults (``registry.default_roles()``), a sane
+         starting fleet so a fresh install renders instead of blank.
+
+    Layering is per-role: a default only fills a role neither the config nor the
+    registry provides. A user's config.roles or a promoted registry entry ALWAYS
+    wins for that role, and the defaults are never written back to the registry.
+    """
     from ..registry import registry as _registry
 
+    merged: dict = dict(_registry.default_roles())
+
     loaded = _registry.load().get("roles", {})
-    return loaded if isinstance(loaded, dict) else {}
+    if isinstance(loaded, dict):
+        merged.update(loaded)
+
+    roles = _get(config, "roles", {})
+    if isinstance(roles, dict):
+        merged.update(roles)
+
+    return merged
+
+
+def role_sources(config: Any = None) -> dict[str, str]:
+    """Per-role provenance for the effective role table: ``"config"`` |
+    ``"registry"`` | ``"default"``. Mirrors the precedence in :func:`_roles`
+    (config wins over registry wins over the shipped defaults) so a reader can
+    tell which roles are real vs suggested-but-not-yet-downloaded defaults.
+    """
+    from ..registry import registry as _registry
+
+    src: dict[str, str] = {r: "default" for r in _registry.default_roles()}
+    loaded = _registry.load().get("roles", {})
+    if isinstance(loaded, dict):
+        for r in loaded:
+            src[r] = "registry"
+    roles = _get(config, "roles", {})
+    if isinstance(roles, dict):
+        for r in roles:
+            src[r] = "config"
+    return src
 
 
 def resolve(
