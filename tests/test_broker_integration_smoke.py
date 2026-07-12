@@ -257,6 +257,25 @@ def test_d8_external_call_emits_one_clean_generation_event(client, monkeypatch):
     assert any(k == "broker.serve" for k, _ in events)
 
 
+def test_d8_embeddings_emit_ops_but_no_cost_event(client, monkeypatch):
+    """D8: embeddings are not econ tasks. An external embeddings request records
+    the ops event but must NOT emit a cost `generation` event (which would create
+    a bogus task_type=None 'unknown' row in the receipt)."""
+    import cheapskate.telemetry as tele
+
+    events = []
+    monkeypatch.setattr(tele, "log_event", lambda kind, **f: events.append((kind, f)))
+    r = client.post(
+        "/v1/embeddings",
+        headers={"Authorization": "Bearer sk-test"},
+        json={"model": "role:reasoning", "input": "embed me"},
+    )
+    assert r.status_code == 200
+    kinds = [k for k, _ in events]
+    assert "broker.serve" in kinds
+    assert "generation" not in kinds
+
+
 def test_stream_with_task_type_is_400_invalid_request(client):
     # R1: streaming through the task_type econ path is unsupported. It must be a
     # 400 invalid_request_error (OpenAI clients handle it gracefully), NOT a 501

@@ -506,18 +506,21 @@ def build_app(config: Any = None):
         def _emit_serve(ok: bool, *, status_code: int | None = None, error: str | None = None):
             """Every served request logs one ops record (kind ``broker.serve``:
             latency/queue/status; the econ report ignores it). For genuinely
-            external OpenAI-compat traffic (no X-Cheapskate-Internal) the broker is
-            the only meter, so it ALSO logs one cost-shaped ``generation`` event
-            with a clean ``route="local"`` and the request's task_type. Internal
-            router calls skip the cost event (the router already emitted it)."""
-            latency_s = round(time.monotonic() - start, 3)
+            external OpenAI-compat CHAT traffic (no X-Cheapskate-Internal) the
+            broker is the only meter, so it ALSO logs one cost-shaped
+            ``generation`` event with a clean ``route="local"`` and the request's
+            task_type. Internal router calls skip the cost event (the router
+            already emitted it); embeddings are not econ tasks, so they get only
+            the ops record. ``duration_s`` (not ``latency_s``) is the field the
+            econ report reads, so the cost event carries it."""
+            duration_s = round(time.monotonic() - start, 3)
             queued_ms = round(queued * 1000)
             _log("broker.serve", model=spec.model, route=route, user=user,
-                 task_type=task_type, latency_s=latency_s, queued_ms=queued_ms,
+                 task_type=task_type, latency_s=duration_s, queued_ms=queued_ms,
                  ok=ok, status_code=status_code, error=error)
-            if not internal:
+            if not internal and not embed:
                 _log("generation", model=spec.model, route="local", user=user,
-                     task_type=task_type, latency_s=latency_s, ok=ok,
+                     task_type=task_type, duration_s=duration_s, ok=ok,
                      retries=0, escalated=False, error=error)
         try:
             try:
