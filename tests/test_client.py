@@ -68,6 +68,8 @@ def test_complete_returns_text_and_metadata(registered_key):
     assert req["url"].endswith("/v1/chat/completions")
     assert req["json"]["model"] == "role:reasoning"
     assert req["headers"]["Authorization"] == f"Bearer {registered_key}"
+    # D8: the internal marker so the broker does not double-count this call in econ.
+    assert req["headers"]["X-Cheapskate-Internal"] == "1"
 
 
 def test_complete_passes_system_prompt(registered_key):

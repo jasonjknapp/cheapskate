@@ -52,7 +52,12 @@ The broker's `/v1/chat/completions` doubles as the drop-in OpenAI-compatible ado
 dispatch); otherwise it is a direct role/model proxy. `router/task.py` executes both local and
 cloud routes (fail-closed both directions), consults the budget governor before a cloud dispatch,
 and emits a `kind="generation"` event per attempt (the econ report/governor cost only that kind;
-`kind="task.run"` is a per-run summary, not re-counted).
+`kind="task.run"` is a per-run summary, not re-counted). The router is the single source of truth
+for cost events: it alone knows retries and escalations. The broker records one `kind="broker.serve"`
+ops event per served request (latency, queue depth, status), which the econ report ignores; the
+broker emits a cost `generation` event ONLY for genuinely external OpenAI-compatible traffic (a
+request with no `X-Cheapskate-Internal` header, i.e. not from cheapskate's own router), so a
+router-driven call is metered exactly once.
 
 Copy-pasteable agent-offload kits (Claude Code, Gemini CLI, Codex, and any OpenAI-compatible tool)
 live in `integrations/`: MCP registrations for `cheapskate mcp` plus paste-in offload guidance, all

@@ -216,6 +216,47 @@ def test_d7_ensure_local_key_mints_interactive_key_on_first_run():
     assert len(json.loads(keyfile.read_text())) == 1
 
 
+def test_d8_internal_call_emits_no_generation_event(client, monkeypatch):
+    """D8: a request from cheapskate's own router (X-Cheapskate-Internal) must NOT
+    produce a broker `generation` event (the router already emitted the costable
+    one), only an ops `broker.serve` record. This prevents the econ double-count."""
+    import cheapskate.telemetry as tele
+
+    events = []
+    monkeypatch.setattr(tele, "log_event", lambda kind, **f: events.append((kind, f)))
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer sk-test", "X-Cheapskate-Internal": "1"},
+        json={"model": "role:reasoning", "messages": [{"role": "user", "content": "ping"}]},
+    )
+    assert r.status_code == 200
+    kinds = [k for k, _ in events]
+    assert "broker.serve" in kinds          # ops record present
+    assert "generation" not in kinds        # NO cost event (router owns it)
+
+
+def test_d8_external_call_emits_one_clean_generation_event(client, monkeypatch):
+    """D8: genuinely external OpenAI-compat traffic (no internal header) has no
+    router meter, so the broker IS its meter: exactly one `generation` event with
+    a clean route='local' and the task_type, plus the ops record."""
+    import cheapskate.telemetry as tele
+
+    events = []
+    monkeypatch.setattr(tele, "log_event", lambda kind, **f: events.append((kind, f)))
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer sk-test", "X-Task-Type": "summarize"},
+        json={"model": "role:reasoning", "messages": [{"role": "user", "content": "ping"}]},
+    )
+    assert r.status_code == 200
+    gens = [f for k, f in events if k == "generation"]
+    assert len(gens) == 1
+    assert gens[0]["route"] == "local"        # clean bucket, not "ollama:reasoning"
+    assert gens[0]["task_type"] == "summarize"
+    assert gens[0]["retries"] == 0 and gens[0]["escalated"] is False
+    assert any(k == "broker.serve" for k, _ in events)
+
+
 def test_stream_with_task_type_is_400_invalid_request(client):
     # R1: streaming through the task_type econ path is unsupported. It must be a
     # 400 invalid_request_error (OpenAI clients handle it gracefully), NOT a 501
