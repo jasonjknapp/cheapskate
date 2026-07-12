@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Resolve a role or model name to a concrete backend spec.
+
+A role is looked up in the registry (``config.backends`` endpoints +
+``config.task_types`` style role table); an unknown bare model string falls back
+to Ollama for back-compat. The returned :class:`BackendSpec` carries everything
+the lifecycle + capacity layers need: the model tag, the serving backend, the
+OpenAI-compatible endpoint base, and the approximate RAM footprint.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Optional
+
+# Default localhost endpoints per backend. Overridable via config.backends.
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+MLX_HOST = "127.0.0.1"
+MLX_PORT = 8080
+MLX_VLM_PORT = 8081
+
+
+class LocalUnavailable(Exception):
+    """A local backend could not serve the request (down/missing/over-budget).
+
+    Callers degrade gracefully on this — they never silently fall back to a
+    cloud provider.
+    """
+
+
+@dataclass
+class BackendSpec:
+    """A resolved serving target."""
+
+    model: str
+    backend: str  # ollama | mlx | mlx_vlm | remote | cloud
+    endpoint: str
+    approx_gb: Optional[float] = None
+    role: Optional[str] = None
+    quant: Optional[str] = None
+
+
+def infer_backend(model: str) -> str:
+    """Heuristic for a model string not found in the registry.
+
+    Ollama tags look like ``name:tag`` with no slash; MLX/HF repos look like
+    ``org/repo``. A ``hf.co/<repo>:<quant>`` GGUF pull ref is Ollama's even
+    though it contains a slash, so it is special-cased. Everything else with a
+    slash is treated as MLX; otherwise Ollama (the back-compat default).
+    """
+    m = model or ""
+    if m.startswith("hf.co/"):
+        return "ollama"
+    return "mlx" if "/" in m else "ollama"
+
+
+def default_endpoint(backend: str, config: Any = None) -> str:
+    """Default OpenAI-compatible base URL for a backend.
+
+    A ``config.backends`` entry may override any of these — including a
+    non-localhost URL for the multi-machine (remote) story.
+    """
+    endpoints = _config_backends(config)
+    if backend in endpoints:
+        return endpoints[backend]
+    if backend == "mlx_vlm":
+        return f"http://{MLX_HOST}:{MLX_VLM_PORT}"
+    if backend == "mlx":
+        return f"http://{MLX_HOST}:{MLX_PORT}"
+    return DEFAULT_OLLAMA_URL
+
+
+def _config_backends(config: Any) -> dict:
+    """The ``backends`` endpoint map from config, or {} if unset. Never raises."""
+    if config is None:
+        return {}
+    backends = _get(config, "backends", {})
+    if isinstance(backends, dict):
+        return {k: v for k, v in backends.items() if isinstance(v, str)}
+    return {}
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    """Attribute-or-key access, so a pydantic Config OR a plain dict both work."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _roles(config: Any) -> dict:
+    """The role table: a ``roles`` section on the config wins (tests, embedders);
+    otherwise the runtime registry (``registry.yaml``) is the source of truth."""
+    roles = _get(config, "roles", {})
+    if isinstance(roles, dict) and roles:
+        return roles
+    from ..registry import registry as _registry
+
+    loaded = _registry.load().get("roles", {})
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def resolve(
+    role: Optional[str] = None,
+    model: Optional[str] = None,
+    *,
+    config: Any = None,
+    default_model: Optional[str] = None,
+) -> BackendSpec:
+    """Resolve a role or a model name to a :class:`BackendSpec`.
+
+    Precedence: an explicit ``model`` (inheriting role metadata if it matches a
+    role entry) wins over ``role``. Unknown models get an inferred backend and
+    the default endpoint for it.
+    """
+    roles = _roles(config)
+
+    if role and not model:
+        spec = roles.get(role)
+        model_name = _get(spec, "model") if spec is not None else None
+        if not model_name:
+            raise LocalUnavailable(f"role {role!r} has no model configured")
+        backend = _get(spec, "backend") or infer_backend(model_name)
+        return BackendSpec(
+            model=model_name,
+            backend=backend,
+            endpoint=_get(spec, "endpoint") or default_endpoint(backend, config),
+            approx_gb=_get(spec, "approx_gb"),
+            role=role,
+            quant=_get(spec, "quant"),
+        )
+
+    if not model:
+        model = default_model
+    if not model:
+        raise LocalUnavailable("no model or role given and no default configured")
+
+    # If the model matches a role entry, inherit that entry's metadata.
+    for rname, spec in roles.items():
+        if _get(spec, "model") == model:
+            backend = _get(spec, "backend") or infer_backend(model)
+            return BackendSpec(
+                model=model,
+                backend=backend,
+                endpoint=_get(spec, "endpoint") or default_endpoint(backend, config),
+                approx_gb=_get(spec, "approx_gb"),
+                role=rname,
+                quant=_get(spec, "quant"),
+            )
+
+    backend = infer_backend(model)
+    return BackendSpec(
+        model=model,
+        backend=backend,
+        endpoint=default_endpoint(backend, config),
+        approx_gb=None,
+        role=None,
+        quant=None,
+    )
+
+
+def port_of(spec: BackendSpec, default: int = MLX_PORT) -> int:
+    """Extract the TCP port from a spec's endpoint (for MLX server targeting)."""
+    ep = spec.endpoint or default_endpoint("mlx")
+    try:
+        return int(ep.rsplit(":", 1)[1].split("/")[0])
+    except Exception:  # noqa: BLE001
+        return default

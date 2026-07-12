@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Pins the public client API (complete / generate_json) via an injected HTTP
+client. No network. Graceful degrade surfaces as CheapskateUnavailable."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from cheapskate import client
+from cheapskate.broker.gates import genkey
+
+
+@pytest.fixture
+def registered_key(tmp_path, monkeypatch):
+    """Register an interactive key in the isolated state dir and return it."""
+    from cheapskate.broker import gates
+
+    path = gates.keys_path()
+    key = genkey("tester", "interactive", path=path)
+    return key
+
+
+class FakeResponse:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.text = body if isinstance(body, str) else json.dumps(body)
+
+    def json(self):
+        if isinstance(self._body, str):
+            return json.loads(self._body)
+        return self._body
+
+
+class FakeClient:
+    """Injected via api=. Records the request and returns a queued response."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.requests = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.requests.append({"url": url, "json": json, "headers": headers})
+        return self._responses.pop(0)
+
+
+def _chat_body(content, model="test-model"):
+    return {
+        "model": model,
+        "choices": [{"message": {"content": content}}],
+        "usage": {"completion_tokens": 5, "prompt_tokens": 3},
+    }
+
+
+# ── complete ────────────────────────────────────────────────────────────────
+
+
+def test_complete_returns_text_and_metadata(registered_key):
+    api = FakeClient([FakeResponse(200, _chat_body("hello world"))])
+    out = client.complete("hi", role="reasoning", api=api)
+    assert out["text"] == "hello world"
+    assert out["model"] == "test-model"
+    assert out["eval_count"] == 5
+    # Routed to the broker chat endpoint, with a role: model field + bearer key.
+    req = api.requests[0]
+    assert req["url"].endswith("/v1/chat/completions")
+    assert req["json"]["model"] == "role:reasoning"
+    assert req["headers"]["Authorization"] == f"Bearer {registered_key}"
+
+
+def test_complete_passes_system_prompt(registered_key):
+    api = FakeClient([FakeResponse(200, _chat_body("ok"))])
+    client.complete("q", system="be terse", model="m:tag", api=api)
+    msgs = api.requests[0]["json"]["messages"]
+    assert msgs[0] == {"role": "system", "content": "be terse"}
+    assert msgs[1]["content"] == "q"
+
+
+def test_complete_missing_key_degrades(monkeypatch):
+    # No key registered, no env var → graceful degrade, not a crash.
+    monkeypatch.delenv("CHEAPSKATE_API_KEY", raising=False)
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("hi", model="m", api=FakeClient([]))
+
+
+def test_complete_http_error_degrades(registered_key):
+    api = FakeClient([FakeResponse(503, {"error": "over budget"})])
+    with pytest.raises(client.CheapskateUnavailable) as e:
+        client.complete("hi", model="m", api=api)
+    assert "503" in str(e.value)
+
+
+def test_complete_transport_error_degrades(registered_key):
+    class Boom:
+        def post(self, *a, **k):
+            raise ConnectionError("refused")
+
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("hi", model="m", api=Boom())
+
+
+def test_complete_empty_content_degrades(registered_key):
+    api = FakeClient([FakeResponse(200, _chat_body(""))])
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("hi", model="m", api=api)
+
+
+def test_complete_never_falls_back_to_cloud(registered_key):
+    # A broker failure raises; it does not silently return a cloud answer.
+    api = FakeClient([FakeResponse(502, {"error": "backend blew up"})])
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("hi", model="m", api=api)
+    assert len(api.requests) == 1  # exactly one attempt, no second (cloud) path
+
+
+def test_api_key_from_env_wins(monkeypatch):
+    monkeypatch.setenv("CHEAPSKATE_API_KEY", "sk-env-override")
+    api = FakeClient([FakeResponse(200, _chat_body("ok"))])
+    client.complete("hi", model="m", api=api)
+    assert api.requests[0]["headers"]["Authorization"] == "Bearer sk-env-override"
+
+
+# ── generate_json ───────────────────────────────────────────────────────────
+
+
+def test_generate_json_parses_object(registered_key):
+    api = FakeClient([FakeResponse(200, _chat_body('{"fruit": "apple"}'))])
+    out = client.generate_json("list a fruit", model="m", api=api)
+    assert out == {"fruit": "apple"}
+    # Structured requests set response_format json_object.
+    assert api.requests[0]["json"]["response_format"] == {"type": "json_object"}
+
+
+def test_generate_json_repairs_then_succeeds(registered_key):
+    api = FakeClient([
+        FakeResponse(200, _chat_body("not json at all")),
+        FakeResponse(200, _chat_body('{"ok": true}')),
+    ])
+    out = client.generate_json("q", model="m", api=api, retries=2)
+    assert out == {"ok": True}
+    assert len(api.requests) == 2  # one repair round
+    # The repair nudge was appended to the conversation.
+    second_msgs = api.requests[1]["json"]["messages"]
+    assert any("valid JSON" in m["content"] for m in second_msgs if m["role"] == "user")
+
+
+def test_generate_json_exhausts_retries_and_degrades(registered_key):
+    api = FakeClient([FakeResponse(200, _chat_body("garbage")) for _ in range(3)])
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json("q", model="m", api=api, retries=2)
+    assert len(api.requests) == 3  # retries + 1
+
+
+def test_generate_json_validates_pydantic_schema(registered_key):
+    pydantic = pytest.importorskip("pydantic")
+
+    class Fruit(pydantic.BaseModel):
+        name: str
+        qty: int
+
+    api = FakeClient([FakeResponse(200, _chat_body('{"name": "pear", "qty": 3}'))])
+    out = client.generate_json("q", schema=Fruit, model="m", api=api)
+    assert out == {"name": "pear", "qty": 3}
+
+
+def test_generate_json_transport_error_degrades(registered_key):
+    class Boom:
+        def post(self, *a, **k):
+            raise TimeoutError("slow")
+
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json("q", model="m", api=Boom())
