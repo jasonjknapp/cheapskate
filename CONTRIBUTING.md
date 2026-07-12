@@ -77,6 +77,11 @@ These are enforced (ruff + tests) and non-negotiable in a PR:
   kind of change — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - Make sure `make check` is green before you open the PR.
 
+## Acknowledgments
+
+[Bryan Knapp](https://github.com/Sirnapsalott) contributed to the ideation and testing that shaped
+this project.
+
 ## License
 
 By contributing you agree your contributions are licensed under the project's

@@ -281,4 +281,5 @@ Portfolio-grade honesty, because the alternative gets shredded on the first read
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - License: [Apache-2.0](LICENSE) (explicit patent grant, deliberate)
 
-Built and maintained by [Jason Knapp](https://github.com/jasonjknapp).
+Built and maintained by [Jason Knapp](https://github.com/jasonjknapp), with
+[Bryan Knapp](https://github.com/Sirnapsalott) contributing to the ideation and testing.
