@@ -13,6 +13,33 @@ MLX, LM Studio) and cloud APIs. It is not a gateway and not a serving engine. It
 each task should run* (from a spend dial, per-task-type rules, and hard safety classes), then
 measures what that decision cost **on your hardware** and hands you the receipts.
 
+## Why I built this
+
+There are good tools next to this one: LiteLLM (a cloud gateway), GPUStack (a serving cluster),
+RouteLLM (a strong-vs-weak query router), TensorZero (an LLMOps platform). I ran them down before
+writing a line. Each solves a real problem, and none of them centers the four things I actually
+needed on my own machine:
+
+1. **Memory admission for one box.** Two large local models will not fit in the same unified memory
+   at once. Cheapskate has a broker that loads and de-loads models under a single lock, so a routed
+   task never OOMs the machine. The serving tools serve; they do not arbitrate memory across a fleet
+   of roles on one Mac.
+2. **Eval-gated model promotion on *your* hardware.** A credible new local model ships roughly
+   weekly. Cheapskate only promotes one into a role if it beats the incumbent on *your* eval set on
+   *your* hardware, with the incumbent and a rollback target protected. Model choice becomes evidence,
+   not a Reddit thread.
+3. **Fail-closed safety classes in both directions.** Some task types must never run on a weak local
+   model (financial, legal, medical). Some must never leave the box at all. If a never-cloud task
+   cannot run locally, it errors. It does not quietly ship your data off-box. Both directions are
+   pinned by tests.
+4. **Receipts that count retries and escalations.** Content-free telemetry produces a true cost per
+   task type that charges a task for its failed local attempts *and* its cloud escalation, which is
+   exactly the accounting most "I saved $X" claims skip.
+
+If you only need one of those adjacent tools, use it. Often the right answer is one of them *plus*
+cheapskate owning the where-should-this-run-and-what-did-it-cost decision on top. Full head-to-head
+in [How is this different](#how-is-this-different-from-litellm--tensorzero--routellm--gpustack).
+
 > **Status: v0.1, single-author, pre-1.0.** The core, econ engine, cloud tier, eval harness, and
 > CI are in place and tested. It routes real work today. Read the [honest limits](#honest-limits)
 > before you depend on it.
