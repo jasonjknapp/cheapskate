@@ -13,6 +13,10 @@ MLX, LM Studio) and cloud APIs. It is not a gateway and not a serving engine. It
 each task should run* (from a spend dial, per-task-type rules, and hard safety classes), then
 measures what that decision cost **on your hardware** and hands you the receipts.
 
+<img src="docs/assets/demo.svg" alt="A real cheapskate session: point the reasoning role at qwen3:4b in config.yaml, start the broker, run a summarize task that returns a real answer with ok:true routed local, then cheapskate econ shows a receipt reading routed 100% local across 3 runs with the cloud-equivalent cost" width="100%">
+
+<sub>A real session (qwen3:4b on Ollama). Point a role at a small local model, run one task, read the receipt. The 2-minute version is [below](#route-a-real-task-in-2-minutes-one-small-model).</sub>
+
 ## Why I built this
 
 There are good tools next to this one: LiteLLM (a cloud gateway), GPUStack (a serving cluster),

@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="620" viewBox="0 0 820 620" role="img" aria-label="cheapskate terminal demo: a real local task, end to end, running against qwen3:4b on Ollama">
+  <title>cheapskate — a real local task, end to end</title>
+  <desc>An animated terminal session replaying a real cheapskate run: it reads the config, starts the broker, routes a summarize task to the local qwen3:4b model, and prints the econ receipt. The static first frame shows the full session; the animation is progressive enhancement.</desc>
+
+  <!--
+    RENDERING NOTES
+    - Fully self-contained: no <script>, no external refs, no remote data: URLs.
+    - Animation uses SMIL only (GitHub camo / librsvg do not reliably run CSS @keyframes).
+    - Static fallback: every text/group carries opacity="1" as its base value AND nothing
+      forces opacity to 0 at t=0, so both a SMIL-ignoring renderer AND a renderer that
+      samples only the t=0 frame show the COMPLETE, fully-revealed session as a clean
+      screenshot. The <set to="0"> + <animate to="1"> reveal pairs fire only from the first
+      restart.begin (t=6s) onward, where SMIL actually runs.
+    - Reveal loop is 16s (staggered reveal ~11s + ~5s dwell), then repeats.
+  -->
+
+  <!-- window -->
+  <rect x="0" y="0" width="820" height="620" rx="12" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="819" height="619" rx="11.5" fill="none" stroke="#30363d" stroke-width="1"/>
+
+  <!-- title bar -->
+  <rect x="0" y="0" width="820" height="40" rx="12" fill="#161b22"/>
+  <rect x="0" y="28" width="820" height="12" fill="#161b22"/>
+  <circle cx="24" cy="20" r="6" fill="#ff5f56"/>
+  <circle cx="46" cy="20" r="6" fill="#ffbd2e"/>
+  <circle cx="68" cy="20" r="6" fill="#27c93f"/>
+  <text x="410" y="25" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#8b949e">cheapskate — a real local task, end to end</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5">
+
+    <!-- ════════════ BLOCK 1: read the config ════════════ -->
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+0.2s" dur="0.4s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="70"><tspan fill="#7ee787">$</tspan><tspan fill="#c9d1d9"> cat ~/.config/cheapskate/config.yaml</tspan></text>
+    </g>
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+0.9s" dur="0.5s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="92"  fill="#7ee787">roles<tspan fill="#c9d1d9">:</tspan></text>
+      <text x="40" y="112" fill="#79c0ff">reasoning<tspan fill="#c9d1d9">:</tspan></text>
+      <text x="56" y="132" fill="#c9d1d9">model: <tspan fill="#a5d6ff">qwen3:4b</tspan><tspan fill="#8b949e">        # a 3GB local model</tspan></text>
+      <text x="56" y="152" fill="#c9d1d9">backend: <tspan fill="#a5d6ff">ollama</tspan></text>
+    </g>
+
+    <!-- ════════════ BLOCK 2: start the broker ════════════ -->
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+2.6s" dur="0.4s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="188"><tspan fill="#7ee787">$</tspan><tspan fill="#c9d1d9"> cheapskate serve &amp;</tspan></text>
+    </g>
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+3.4s" dur="0.5s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="210" fill="#8b949e">[cheapskate] provisioned a local key (mode-600); broker on 127.0.0.1:4747</text>
+    </g>
+
+    <!-- ════════════ BLOCK 3: run a real task (the hero) ════════════ -->
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+4.8s" dur="0.4s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="246"><tspan fill="#7ee787">$</tspan><tspan fill="#c9d1d9"> cheapskate task --task-type summarize --criteria &quot;One sentence.&quot; --in reef.txt</tspan></text>
+    </g>
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+5.7s" dur="0.6s" from="0" to="1" fill="freeze"/>
+      <text x="24"  y="270" fill="#c9d1d9">{</text>
+      <text x="40"  y="290" fill="#79c0ff">&quot;route&quot;<tspan fill="#c9d1d9">: </tspan><tspan fill="#a5d6ff">&quot;local&quot;</tspan><tspan fill="#c9d1d9">,</tspan></text>
+      <text x="40"  y="310" fill="#79c0ff">&quot;role&quot;<tspan fill="#c9d1d9">: </tspan><tspan fill="#a5d6ff">&quot;reasoning&quot;</tspan><tspan fill="#c9d1d9">,</tspan></text>
+      <text x="40"  y="330" fill="#79c0ff">&quot;output&quot;<tspan fill="#c9d1d9">: </tspan><tspan fill="#7ee787">&quot;The Great Barrier Reef is the world&#39;s largest coral</tspan></text>
+      <text x="72"  y="350" fill="#7ee787">reef system, off the coast of Queensland, Australia.&quot;<tspan fill="#c9d1d9">,</tspan></text>
+      <text x="40"  y="370" fill="#79c0ff">&quot;self_confidence&quot;<tspan fill="#c9d1d9">: </tspan><tspan fill="#d2a8ff">0.9</tspan><tspan fill="#c9d1d9">,</tspan></text>
+      <text x="40"  y="390" fill="#79c0ff">&quot;ok&quot;<tspan fill="#c9d1d9">: </tspan><tspan fill="#7ee787">true</tspan></text>
+      <text x="24"  y="410" fill="#c9d1d9">}</text>
+    </g>
+
+    <!-- ════════════ BLOCK 4: the econ receipt ════════════ -->
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+8.4s" dur="0.4s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="446"><tspan fill="#7ee787">$</tspan><tspan fill="#c9d1d9"> cheapskate econ</tspan></text>
+    </g>
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+9.2s" dur="0.6s" from="0" to="1" fill="freeze"/>
+      <text x="24" y="470" fill="#8b949e" xml:space="preserve">task_type   runs  %local  tok/s   cloud$/Mtok</text>
+      <line x1="24" y1="478" x2="520" y2="478" stroke="#30363d" stroke-width="1"/>
+      <text x="24" y="498" xml:space="preserve" fill="#c9d1d9"><tspan>summarize   3     </tspan><tspan fill="#7ee787">100%</tspan><tspan>    101.1   </tspan><tspan fill="#8b949e">$4.28</tspan></text>
+    </g>
+    <g opacity="1">
+      <set attributeName="opacity" to="0" begin="restart.begin"/>
+      <animate attributeName="opacity" begin="restart.begin+10.4s" dur="0.6s" from="0" to="1" fill="freeze"/>
+      <line x1="24" y1="514" x2="520" y2="514" stroke="#30363d" stroke-width="1"/>
+      <text x="24" y="536" font-size="12.5"><tspan fill="#c9d1d9">routed </tspan><tspan fill="#7ee787">100% local</tspan><tspan fill="#c9d1d9"> across 3 runs, saved vs all-cloud, quality pass </tspan><tspan fill="#7ee787">100%</tspan></text>
+    </g>
+
+  </g>
+
+  <!-- loop clock: an invisible zero-size marker that drives the reveal loop.
+       Its FIRST fire is delayed to 6s so that at t=0 (the frame a static/screenshot
+       renderer captures) EVERY block sits at its base opacity="1" — the full, readable
+       session shows even when no animation plays (GitHub camo / librsvg). Only from the
+       first restart.begin onward do the per-block <set to="0"> + reveal <animate> run.
+       Each cycle: hide-all, staggered typewriter reveal over ~11s, ~5s dwell, repeat (16s). -->
+  <rect x="-10" y="-10" width="1" height="1" fill="#0d1117" opacity="0">
+    <animate id="restart" attributeName="x" begin="6s;restart.end" dur="16s" from="-10" to="-10"/>
+  </rect>
+
+  <!-- caption / honesty strip -->
+  <rect x="0" y="562" width="820" height="58" fill="#161b22"/>
+  <line x1="0" y1="562" x2="820" y2="562" stroke="#30363d" stroke-width="1"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="24" y="586" fill="#c9d1d9" font-size="12.5">Real session: qwen3:4b on Ollama, first run ~50s cold.</text>
+    <text x="24" y="606" fill="#8b949e" font-size="12">Figures from cheapskate&#39;s own telemetry.</text>
+  </g>
+</svg>
