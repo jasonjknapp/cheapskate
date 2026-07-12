@@ -339,7 +339,7 @@ def prepare_backend(spec: BackendSpec, budget_gb: float, config: Any = None) -> 
     auto-loads a present model on request, so this only needs to guarantee the
     model is PRESENT: ``ensure_role`` gate-pulls an absent Ollama model (behind
     the fail-closed disk/size/RAM gate) before the request reaches the daemon.
-    BLOCKING — call via a thread. Raises :class:`LocalUnavailable` on failure."""
+    BLOCKING; call via a thread. Raises :class:`LocalUnavailable` on failure."""
     resolved = ensure_role(model=spec.model, config=config, budget_gb=budget_gb)
     return resolved.endpoint.rstrip("/") + "/v1"
 

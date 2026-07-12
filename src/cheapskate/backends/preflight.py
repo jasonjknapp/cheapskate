@@ -161,8 +161,8 @@ def ensure_role(
             approx_gb=spec.approx_gb, role=spec.role, quant=spec.quant,
         )
     if spec.backend == "ollama":
-        # Hot path: one probe. A PULLED model is all we need — the Ollama daemon
-        # auto-loads it on request, so residency (is-it-in-VRAM) is irrelevant to
+        # Hot path: one probe. A PULLED model is all we need (the Ollama daemon
+        # auto-loads it on request), so residency (is-it-in-VRAM) is irrelevant to
         # whether it will serve. We deliberately do NOT also probe `ollama ps`
         # here (that was a second per-request subprocess for no benefit). If
         # auto_pull is off, an absent model is a hard, actionable error and we
