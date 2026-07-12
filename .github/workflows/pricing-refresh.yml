@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Weekly refresh of src/cheapskate/econ/pricing.json from a PUBLIC pricing source
+# (OpenRouter's public /api/v1/models endpoint — no key required for listing).
+#
+# This is the ONLY place cheapskate touches the network for pricing. The CLI
+# never fetches at runtime. The job opens a pull request; it NEVER pushes to a
+# protected branch directly.
+name: pricing-refresh
+
+on:
+  schedule:
+    # Mondays 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Refresh pricing.json from the public source
+        run: python scripts/refresh_pricing.py
+
+      - name: Open a pull request with any price changes
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(pricing): weekly refresh from public source"
+          branch: pricing/weekly-refresh
+          delete-branch: true
+          title: "chore(pricing): weekly pricing.json refresh"
+          body: |
+            Automated weekly refresh of `src/cheapskate/econ/pricing.json`
+            from the public OpenRouter models endpoint.
+
+            - Prices are USD per 1M tokens.
+            - Each row carries its own `source` + `as_of`.
+            - Review the diff before merging — pricing feeds true-cost math.
+
+            This PR is opened by CI; it does not push to a protected branch.
+          labels: |
+            pricing
+            automated

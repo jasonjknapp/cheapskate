@@ -97,10 +97,16 @@ class TaskTypeRoute(BaseModel):
 
 
 class UserQuota(BaseModel):
-    """Per-user daily budget guards. None ⇒ unlimited."""
+    """Per-user budget guards. None ⇒ unlimited.
+
+    ``monthly_budget_usd`` is the cloud-spend cap the budget governor watches:
+    as month-to-date cloud spend approaches it the governor tightens the dial
+    toward local (≥80% one level, ≥95% local-only for that user's routable work).
+    """
 
     daily_requests: int | None = None
     daily_tokens: int | None = None
+    monthly_budget_usd: float | None = None
 
 
 class UserProfile(BaseModel):
@@ -110,6 +116,29 @@ class UserProfile(BaseModel):
 
     key_class: str = "interactive"  # interactive | background
     quota: UserQuota = Field(default_factory=UserQuota)
+
+
+class EconConfig(BaseModel):
+    """Economics inputs the cost engine needs but cannot measure for free.
+
+    All three default to ``None`` on purpose: an honest tool omits a number it
+    cannot know rather than guessing. With ``electricity_usd_per_kwh`` unset the
+    report runs in "electricity unknown" mode and reports energy cost as N/A;
+    with ``hardware_amortization_usd_per_month`` unset no amortization share is
+    added. ``pricing_max_age_days`` bounds how stale bundled cloud prices may be
+    before the report warns (warn, never fail)."""
+
+    # $/kWh for local energy cost. None ⇒ "electricity unknown": energy cost is
+    # omitted from local $/task rather than fabricated.
+    electricity_usd_per_kwh: float | None = None
+    # Amortized hardware cost per month, spread across the month's local tasks.
+    # None ⇒ no amortization share added.
+    hardware_amortization_usd_per_month: float | None = None
+    # Bundled pricing.json older than this (by its newest as_of) warns, not fails.
+    pricing_max_age_days: int = 14
+    # Static fallback watts when powermetrics is unavailable / no-sudo. None ⇒
+    # power draw unknown (energy cost omitted even if $/kWh is set).
+    watts_estimate: float | None = None
 
 
 # ── shipped defaults (as data) ───────────────────────────────────────────────
@@ -153,6 +182,7 @@ class Config(BaseModel):
 
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     dial: DialConfig = Field(default_factory=DialConfig)
+    econ: EconConfig = Field(default_factory=EconConfig)
     machine: MachineConfig = Field(default_factory=MachineConfig)
     backends: dict[str, BackendEntry] = Field(default_factory=_default_backends)
     task_types: dict[str, TaskTypeRoute] = Field(default_factory=_default_task_types)

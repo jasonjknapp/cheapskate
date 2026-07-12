@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Cheapskate command line: dial · models · task · serve · doctor · report.
+"""Cheapskate command line: dial · models · task · serve · doctor · econ · report.
 
 Thin by design — every subcommand is a few lines that shell out to the module
 that owns the logic. The CLI parses args and prints; it decides nothing.
@@ -189,11 +189,70 @@ def _probe_url(url: str) -> dict[str, Any]:
         return {"ok": None, "reachable": False, "url": url, "error": type(exc).__name__}
 
 
+# ── econ ─────────────────────────────────────────────────────────────────────
+
+
+def _cmd_econ(args: argparse.Namespace) -> int:
+    """The recommendation table: per-task-type routing recommendation from
+    measured telemetry (stay-local | go-cloud | mixed), plus the true $/1M-token
+    local-vs-cloud comparison."""
+    from .econ import report as _report
+
+    cfg = _config.load()
+    bundle = _report.generate(cfg, month=args.month, cloud_ref_model=args.cloud_ref)
+    if not bundle.reports:
+        print(
+            "No telemetry yet for "
+            + (args.month or "this month")
+            + " — run some tasks, then `cheapskate econ`."
+        )
+        return 0
+    text = _report.render_report(
+        bundle.reports,
+        bundle.receipts,
+        pricing_origin=bundle.pricing_origin,
+        staleness=bundle.staleness,
+        power=bundle.power,
+    )
+    print(text)
+    return 0
+
+
 # ── report ───────────────────────────────────────────────────────────────────
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    print("econ engine lands in v0.2 of this build")
+    """Monthly receipts. ``--share`` emits a content-free aggregate markdown
+    receipt safe to post publicly; otherwise the full human report."""
+    from .econ import report as _report
+
+    cfg = _config.load()
+    bundle = _report.generate(cfg, month=args.month, cloud_ref_model=args.cloud_ref)
+
+    if args.share:
+        print(
+            _report.render_share(
+                bundle.reports, bundle.receipts, machine_id=cfg.machine.machine_id
+            )
+        )
+        return 0
+
+    if not bundle.reports:
+        print(
+            "No telemetry yet for "
+            + (args.month or "this month")
+            + " — nothing to report."
+        )
+        return 0
+    print(
+        _report.render_report(
+            bundle.reports,
+            bundle.receipts,
+            pricing_origin=bundle.pricing_origin,
+            staleness=bundle.staleness,
+            power=bundle.power,
+        )
+    )
     return 0
 
 
@@ -221,7 +280,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("serve", help="run the broker daemon (needs broker deps)")
     sub.add_parser("doctor", help="check config, dirs, and backend reachability")
-    sub.add_parser("report", help="econ report (stub in v0.1)")
+
+    e = sub.add_parser("econ", help="per-task-type routing recommendation table")
+    e.add_argument("--month", default=None, help="restrict to a month (YYYY-MM)")
+    e.add_argument(
+        "--cloud-ref", dest="cloud_ref", default="gpt-4o-mini",
+        help="cloud model to price the cloud-equivalent against",
+    )
+
+    r = sub.add_parser("report", help="monthly savings receipts")
+    r.add_argument(
+        "--share", action="store_true",
+        help="emit a content-free aggregate markdown receipt (safe to post)",
+    )
+    r.add_argument("--month", default=None, help="restrict to a month (YYYY-MM)")
+    r.add_argument(
+        "--cloud-ref", dest="cloud_ref", default="gpt-4o-mini",
+        help="cloud model to price the cloud-equivalent against",
+    )
     return ap
 
 
@@ -238,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_serve(args)
     if args.cmd == "doctor":
         return _cmd_doctor(args)
+    if args.cmd == "econ":
+        return _cmd_econ(args)
     if args.cmd == "report":
         return _cmd_report(args)
     ap.print_help()

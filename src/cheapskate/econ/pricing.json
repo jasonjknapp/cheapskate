@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "note": "Public list prices in USD per 1,000,000 tokens. A small honest snapshot, not exhaustive. Refreshed weekly by .github/workflows/pricing-refresh.yml from a public pricing source; edit by PR only. Each row carries its own source + as_of so staleness is per-row auditable.",
+  "models": [
+    {
+      "id": "gpt-4o",
+      "input_usd_per_mtok": 2.5,
+      "output_usd_per_mtok": 10.0,
+      "source": "openai.com/api/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "input_usd_per_mtok": 0.15,
+      "output_usd_per_mtok": 0.6,
+      "source": "openai.com/api/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "o3-mini",
+      "input_usd_per_mtok": 1.1,
+      "output_usd_per_mtok": 4.4,
+      "source": "openai.com/api/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "claude-3-5-sonnet",
+      "input_usd_per_mtok": 3.0,
+      "output_usd_per_mtok": 15.0,
+      "source": "anthropic.com/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "claude-3-5-haiku",
+      "input_usd_per_mtok": 0.8,
+      "output_usd_per_mtok": 4.0,
+      "source": "anthropic.com/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "claude-3-opus",
+      "input_usd_per_mtok": 15.0,
+      "output_usd_per_mtok": 75.0,
+      "source": "anthropic.com/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "gemini-1.5-pro",
+      "input_usd_per_mtok": 1.25,
+      "output_usd_per_mtok": 5.0,
+      "source": "ai.google.dev/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "gemini-1.5-flash",
+      "input_usd_per_mtok": 0.075,
+      "output_usd_per_mtok": 0.3,
+      "source": "ai.google.dev/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "deepseek-chat",
+      "input_usd_per_mtok": 0.27,
+      "output_usd_per_mtok": 1.1,
+      "source": "deepseek.com/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "mistral-large",
+      "input_usd_per_mtok": 2.0,
+      "output_usd_per_mtok": 6.0,
+      "source": "mistral.ai/pricing",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "llama-3.1-70b-instruct",
+      "input_usd_per_mtok": 0.35,
+      "output_usd_per_mtok": 0.4,
+      "source": "openrouter.ai/models",
+      "as_of": "2026-07-01"
+    },
+    {
+      "id": "qwen-2.5-72b-instruct",
+      "input_usd_per_mtok": 0.35,
+      "output_usd_per_mtok": 0.4,
+      "source": "openrouter.ai/models",
+      "as_of": "2026-07-01"
+    }
+  ]
+}
