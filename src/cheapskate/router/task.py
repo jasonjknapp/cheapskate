@@ -276,6 +276,12 @@ def _run_local(
 
     while attempts < max_attempts:
         attempts += 1
+        # This is the terminal attempt when the run has spent its whole budget.
+        # A local run that ends not-ok on its terminal attempt IS the escalation
+        # (the caller must step up a tier), so exactly that one generation event
+        # carries escalated=True; a run that succeeds earlier breaks the loop and
+        # never reaches an escalated=True emission.
+        is_last = attempts >= max_attempts
         attempt_started = time.monotonic()
         prompt = _build_prompt(criteria, payload, feedback)
         attempt_ok = False
@@ -287,7 +293,7 @@ def _run_local(
             feedback = f"model call failed: {error_kind}"
             _emit_generation(
                 task_type, "local", role, user,
-                retries=attempts - 1, escalated=False, ok=False,
+                retries=attempts - 1, escalated=is_last, ok=False,
                 duration_s=round(time.monotonic() - attempt_started, 3),
                 error_kind=attempt_error,
             )
@@ -304,7 +310,7 @@ def _run_local(
                 feedback = fb
         _emit_generation(
             task_type, "local", role, user,
-            retries=attempts - 1, escalated=False, ok=attempt_ok,
+            retries=attempts - 1, escalated=(is_last and not attempt_ok), ok=attempt_ok,
             duration_s=round(time.monotonic() - attempt_started, 3),
             error_kind=attempt_error,
         )
@@ -380,6 +386,9 @@ def _run_cloud(
         except Exception as exc:  # noqa: BLE001 — a cloud dispatch failure is HARD, no local fallback
             # A provider/config/key failure is fail-closed: emit the failed
             # attempt, then re-raise as CloudUnavailable — never downgrade local.
+            # cloud events are costed via cloud_runs; escalated stays False to
+            # keep the receipt categories disjoint (a cloud event tagged escalated
+            # would be double-counted as cloud-hitting spend).
             _emit_generation(
                 task_type, "cloud", role, user,
                 retries=attempts - 1, escalated=False, ok=False,
@@ -410,6 +419,9 @@ def _run_cloud(
             else:
                 error_kind = attempt_error = "verify_failed"
                 feedback = fb
+        # cloud events are costed via cloud_runs; escalated stays False to keep
+        # the receipt categories disjoint (a cloud event tagged escalated would
+        # be double-counted as cloud-hitting spend).
         _emit_generation(
             task_type, "cloud", model_used, user,
             retries=attempts - 1, escalated=False, ok=attempt_ok,

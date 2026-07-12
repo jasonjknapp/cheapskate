@@ -60,6 +60,8 @@ class TaskTypeStats:
     local_runs: int = 0
     cloud_runs: int = 0
     total_retries: int = 0
+    # escalations counts non-cloud (local) runs that ended escalated; disjoint
+    # from cloud_runs by construction (a cloud-routed event never increments it).
     escalations: int = 0
     total_duration_s: float = 0.0
     tokens_in: int = 0
@@ -152,7 +154,10 @@ def collect_stats(
         elif route == "cloud":
             st.cloud_runs += 1
         st.total_retries += int(evt.get("retries") or 0)
-        if evt.get("escalated"):
+        # Count an escalation only for a non-cloud (local) run: a cloud-routed
+        # event is already costed via cloud_runs, so counting it here too would
+        # double-count it in ``cloud_hitting``. Disjoint by construction.
+        if evt.get("escalated") and evt.get("route") != "cloud":
             st.escalations += 1
         st.total_duration_s += float(evt.get("duration_s") or 0.0)
         st.tokens_in += int(evt.get("tokens_in") or 0)

@@ -106,6 +106,12 @@ def _cmd_task(args: argparse.Namespace) -> int:
     except _routes.NeverCloud as exc:
         _print({"task_type": args.task_type, "route": "refused", "class": "never_cloud", "reason": str(exc)})
         return 2
+    except _task.CloudUnavailable as exc:
+        _print({"task_type": args.task_type, "route": "refused", "class": "cloud_unavailable", "reason": str(exc)})
+        return 2
+    except _task.LocalUnavailable as exc:
+        _print({"task_type": args.task_type, "route": "refused", "class": "local_unavailable", "reason": str(exc)})
+        return 2
     _print(result)
     return 0
 

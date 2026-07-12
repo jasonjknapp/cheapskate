@@ -100,6 +100,39 @@ def test_malformed_line_skipped(tmp_path):
     assert len(events) == 1
 
 
+def test_escalated_local_run_counted_and_costed(tmp_path):
+    # R1/T1: a local run that ended escalated is counted as an escalation and its
+    # cost reaches the receipts. With 5 clean local runs + 1 escalated local run,
+    # collect_stats sees escalations == 1, and compute_receipts prices the
+    # escalation term so cloud_spend_usd > 0 (cloud_hitting >= 1) against a priced
+    # snapshot.
+    events = [_gen(tokens_in=1000, tokens_out=500) for _ in range(5)]
+    events.append(_gen(route="local", escalated=True, ok=False, retries=2,
+                       tokens_in=1000, tokens_out=500))
+    stats = report.collect_stats(events)
+    st = stats["summarize"]
+    assert st.escalations == 1
+    assert st.cloud_runs == 0  # the escalation ROUTED local; disjoint from cloud
+    reports = report.build_task_reports(
+        stats, _config_with_energy(), _snapshot(), _power_known()
+    )
+    receipts = report.compute_receipts(reports, month="2026-07", assumptions=["x"])
+    # cloud_hitting = cloud_runs(0) + escalations(1) = 1 → priced → nonzero
+    assert receipts.cloud_spend_usd > 0.0
+
+
+def test_cloud_routed_escalated_event_not_double_counted():
+    # R1/T2: an adversarial (or buggy) emitter tags a cloud-routed event
+    # escalated=True. The structural guard must NOT count it as an escalation
+    # (that would double-count it as cloud-hitting spend); it is costed once via
+    # cloud_runs.
+    events = [_gen(route="cloud", escalated=True, ok=True)]
+    stats = report.collect_stats(events)
+    st = stats["summarize"]
+    assert st.escalations == 0  # cloud-routed → never an escalation count
+    assert st.cloud_runs == 1  # costed exactly once via cloud_runs
+
+
 # ── costing + recommendation ─────────────────────────────────────────────────
 
 

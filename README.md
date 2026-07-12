@@ -167,7 +167,7 @@ the repo.
 ## Multi-machine
 
 **v0.1 (today): remote backends.** A backend entry with a non-localhost URL points at another box's
-Ollama/MLX endpoint. The `machine` field flows through telemetry and the econ report, so tokens/sec
+Ollama/MLX endpoint. The `machine_id` field flows through telemetry and the econ report, so tokens/sec
 and watts are tracked per machine. Your desktop can dispatch to the GPU box in the other room today.
 
 **v0.2 (roadmap): the fleet agent.** Remote load/swap, per-machine locks, auto-discovery: "your

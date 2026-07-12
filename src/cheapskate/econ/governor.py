@@ -43,7 +43,20 @@ _SUB_ORDER = ("max", "std", "lite")
 
 @dataclass(frozen=True)
 class GovernorDecision:
-    """What the governor concluded for a user this run."""
+    """What the governor concluded for a user this run.
+
+    Two independent flags that callers keep confusing:
+
+    * ``changed`` — the recommended dial (``to_dial``) differs from the dial the
+      caller passed in (``from_dial``). Apply ``to_dial`` for THIS request; the
+      recommendation always applies while over threshold, even on requests after
+      the first this month (it is not gated on whether telemetry re-emitted).
+    * ``emitted_event`` — this threshold crossing fired for the FIRST time this
+      month (a fresh telemetry event was written). Act-once consumers
+      (notifications, one-shot persistence) must key off THIS, not ``changed``;
+      a later request the same month that is still over the same threshold has
+      ``emitted_event=False`` but ``changed`` may still be True.
+    """
 
     user: str
     month: str
@@ -52,9 +65,9 @@ class GovernorDecision:
     fraction: float | None  # spend / budget, None when no budget set
     threshold_crossed: str | None  # "tighten" | "force-local" | None
     from_dial: tuple[int, str | None]
-    to_dial: tuple[int, str | None]
-    changed: bool
-    emitted_event: bool
+    to_dial: tuple[int, str | None]  # dial recommended for THIS request; apply it
+    changed: bool  # to_dial != from_dial (the dial the caller passed)
+    emitted_event: bool  # first firing this month — act-once consumers key off this
     reason: str
 
 
@@ -74,9 +87,13 @@ def month_to_date_cloud_spend(
     month: str,
     cloud_ref_model: str = "gpt-5.4-mini",
 ) -> float:
-    """Sum the USD a user sent to the cloud this month. A generation event counts
-    as cloud spend when it was cloud-routed OR escalated off a local attempt.
-    Priced at the reference model's token rates (same yardstick as the report)."""
+    """Sum the USD a user actually sent to the cloud this month. Only cloud-routed
+    generation events count: an escalated LOCAL attempt is the caller's signal to
+    step up a tier, it did NOT itself hit the cloud — and when the caller does
+    escalate, that escalation runs as its own ``route=="cloud"`` generation event,
+    which is what gets costed here (so escalation spend is captured exactly once,
+    never double-counted). Priced at the reference model's token rates (same
+    yardstick as the report)."""
     ref = pricing.lookup(snapshot, cloud_ref_model)
     if ref is None:
         return 0.0
@@ -88,8 +105,7 @@ def month_to_date_cloud_spend(
             continue
         if _event_month(evt) != month:
             continue
-        hit_cloud = evt.get("route") == "cloud" or bool(evt.get("escalated"))
-        if not hit_cloud:
+        if evt.get("route") != "cloud":
             continue
         total += costmath.cloud_cost_usd(
             int(evt.get("tokens_in") or 0),
@@ -248,6 +264,11 @@ def govern_user(
         reason=(
             f"spend {fraction:.0%} of ${budget:.2f} cap crossed the "
             f"{threshold} threshold"
-            + ("" if not already else " (already fired this month — idempotent, no re-emit)")
+            + (
+                ""
+                if not already
+                else " (threshold already fired this month; telemetry not "
+                "re-emitted, dial recommendation still applies)"
+            )
         ),
     )

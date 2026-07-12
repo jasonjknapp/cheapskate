@@ -101,6 +101,6 @@ background); a running generation is never preempted.
 
 ## Related reading
 
-The design of the unattended-agent send-authority firewall (why automated agents get *no*
-outward-facing capability surface) is written up as a companion article — linked from the project
-homepage. It's the same fail-closed instinct applied to a different blast radius.
+The unattended-agent send-authority firewall (why automated agents get *no* outward-facing
+capability surface) is a design carried over from the author's private automation stack: the same
+fail-closed instinct applied to a different blast radius.

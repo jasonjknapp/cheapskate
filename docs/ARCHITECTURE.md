@@ -13,7 +13,8 @@ src/cheapskate/
 ├── config.py         config.yaml loader → Config object (shipped defaults + user overrides)
 ├── telemetry.py      content-free JSONL event writer (state_dir()/telemetry.jsonl)
 ├── broker/
-│   ├── app.py        FastAPI app: auth classes, admission, /generate, /status, /models
+│   ├── app.py        FastAPI app: auth classes, admission, /v1/chat/completions,
+│   │                 /v1/embeddings, /v1/models, /admin/status
 │   ├── gates.py      PriorityGate + ModelAwareGate (admission: a running generation is NEVER preempted)
 │   └── capacity.py   capacity_decision(), memory_snapshot() (RAM budget vs resident models)
 ├── backends/
@@ -49,7 +50,8 @@ cloud routes (fail-closed both directions), consults the budget governor before 
 and emits a `kind="generation"` event per attempt (the econ report/governor cost only that kind;
 `kind="task.run"` is a per-run summary, not re-counted).
 
-Out of scope until later sessions: eval harness + `doctor` full checks + CI (S4).
+Shipped alongside the core: the deterministic eval harness (`cheapskate eval`), full `doctor`
+preflight checks, and CI.
 
 ## Contracts (both extraction agents code against these)
 
@@ -67,7 +69,7 @@ Out of scope until later sessions: eval harness + `doctor` full checks + CI (S4)
 - `telemetry.log_event(kind, **fields)` appends one JSON line. CONTENT-FREE BY CONSTRUCTION:
   never prompt/output text — only counts, lengths, durations, model, backend, machine_id,
   task_type, user, ok, retries, escalated, error kind. Every event carries `machine_id` and
-  `ts` (UTC ISO). This is the raw feed the S2 econ engine consumes — get the fields right.
+  `ts` (UTC ISO). This is the raw feed the econ engine consumes — get the fields right.
 - Broker auth: named keys with classes `interactive` > `background` (priority), per-user.
   Generic names only (no personal key names).
 

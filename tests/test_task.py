@@ -120,6 +120,50 @@ def test_model_exception_is_a_repairable_attempt_then_escalates():
     assert res["ok"] is False
 
 
+def test_exhausted_local_run_emits_exactly_one_escalated_generation(monkeypatch):
+    # R1: escalations must reach the receipts. A local run that exhausts its
+    # retries (verify always rejects) emits one kind="generation" event PER
+    # ATTEMPT, and EXACTLY ONE of them — the terminal attempt — carries
+    # escalated=True. Earlier attempts stay escalated=False.
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        task.telemetry, "log_event",
+        lambda kind, **fields: captured.append((kind, fields)),
+    )
+    cfg = Config()
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=lambda *a, **k: _envelope("nope"),
+        verify=lambda out, crit: (False, "still bad"),
+        max_retries=2,
+    )
+    assert res["escalated"] is True and res["ok"] is False
+    gens = [f for kind, f in captured if kind == "generation"]
+    assert len(gens) == 3  # 1 initial + 2 retries, one event each
+    escalated = [g for g in gens if g["escalated"]]
+    assert len(escalated) == 1  # exactly the terminal attempt
+    assert escalated[0]["route"] == "local"
+    assert escalated[0]["ok"] is False
+
+
+def test_successful_local_run_never_emits_escalated(monkeypatch):
+    # A run that succeeds on any attempt breaks the loop → every emitted
+    # generation event has escalated=False.
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        task.telemetry, "log_event",
+        lambda kind, **fields: captured.append((kind, fields)),
+    )
+    cfg = Config()
+    task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=lambda *a, **k: _envelope("done"),
+        verify=lambda out, crit: (True, ""),
+    )
+    gens = [f for kind, f in captured if kind == "generation"]
+    assert gens and all(g["escalated"] is False for g in gens)
+
+
 def test_no_verify_hook_accepts_first_output():
     cfg = Config()
     res = task.run("summarize", "crit", "data", cfg, dial=(2, "std"),

@@ -75,9 +75,50 @@ def _broker_cfg(config: Any) -> dict:
             "gate": _get(broker, "gate"),
             "max_tokens_floor": _get(broker, "max_tokens_floor"),
             "bind_lan": _get(broker, "bind_lan"),
+            "bind_loopback": _get(broker, "bind_loopback"),
             "keys_file": _get(broker, "keys_file"),
         }
     return broker
+
+
+# Hosts that count as loopback for the bind guard.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def resolve_bind_host(config: Any) -> str:
+    """Decide the host the broker binds, enforcing the ``bind_loopback`` guard.
+
+    * ``bind_lan`` true → the configured host is used as-is (deliberate opt-in
+      for LAN/tailnet reach; a bare loopback host is widened to ``0.0.0.0``).
+    * else ``bind_loopback`` true (the default) → the effective host MUST be
+      loopback; a non-loopback configured host is a hard startup error naming the
+      two ways to allow it.
+    * else (``bind_loopback`` explicitly false) → the configured host is used
+      as-is, loopback or not.
+
+    Pure (no server started) so the policy is unit-testable directly."""
+    broker_cfg = _broker_cfg(config)
+    host = broker_cfg.get("host") or DEFAULT_HOST
+    bind_lan = bool(broker_cfg.get("bind_lan"))
+    # Default to loopback-enforced when the field is absent (matches the config
+    # default of bind_loopback=True).
+    bl = broker_cfg.get("bind_loopback")
+    bind_loopback = True if bl is None else bool(bl)
+
+    if bind_lan:
+        if host in ("127.0.0.1", "localhost"):
+            return "0.0.0.0"  # deliberate opt-in: LAN/tailnet reach for remote machines
+        return host
+    if bind_loopback:
+        if host not in _LOOPBACK_HOSTS:
+            raise RuntimeError(
+                f"broker.host is {host!r} but bind_loopback is on: refusing to "
+                "bind a non-loopback address. Set broker.bind_lan: true to allow "
+                "LAN/tailnet reach, or broker.bind_loopback: false to bind this "
+                "host explicitly."
+            )
+        return host
+    return host
 
 
 def _budget_gb(config: Any) -> float:
@@ -536,12 +577,18 @@ def build_app(config: Any = None):
         if body.get("stream"):
             # Streaming through the task_type econ path is not implemented; a
             # concrete-model/role stream still works via the direct local proxy.
+            # 400 invalid_request_error (OpenAI-style) so OpenAI clients handle it
+            # gracefully; 501 reads as endpoint-fatal.
             if body.get("task_type"):
                 return JSONResponse(
-                    {"error": "stream=true is not supported with a task_type "
-                              "(econ routing); omit task_type to stream a concrete "
-                              "model/role, or set stream=false"},
-                    status_code=501,
+                    {"error": {
+                        "message": "streaming is not supported when task_type "
+                                   "routing is requested; omit task_type to stream "
+                                   "a concrete model/role, or set stream=false",
+                        "type": "invalid_request_error",
+                        "code": "stream_not_supported",
+                    }},
+                    status_code=400,
                 )
 
         task_type = body.get("task_type")
@@ -627,8 +674,6 @@ def serve(config: Any = None) -> None:
 
         config = load()
     broker_cfg = _broker_cfg(config)
-    host = broker_cfg.get("host") or DEFAULT_HOST
-    if broker_cfg.get("bind_lan") and host in ("127.0.0.1", "localhost"):
-        host = "0.0.0.0"  # deliberate opt-in: LAN/tailnet reach for remote machines
+    host = resolve_bind_host(config)  # enforces bind_loopback / bind_lan policy
     port = int(broker_cfg.get("port") or DEFAULT_PORT)
     uvicorn.run(build_app(config), host=host, port=port, log_level="warning")

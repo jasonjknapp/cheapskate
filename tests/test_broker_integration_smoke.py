@@ -151,3 +151,21 @@ def test_chat_completions_auth_rejection_path(client):
         json={"model": "role:reasoning", "messages": [{"role": "user", "content": "ping"}]},
     )
     assert r.status_code == 401
+
+
+def test_stream_with_task_type_is_400_invalid_request(client):
+    # R1: streaming through the task_type econ path is unsupported. It must be a
+    # 400 invalid_request_error (OpenAI clients handle it gracefully), NOT a 501
+    # (which reads as endpoint-fatal).
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer sk-test"},
+        json={
+            "task_type": "summarize", "stream": True,
+            "messages": [{"role": "user", "content": "ping"}],
+        },
+    )
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["type"] == "invalid_request_error"
+    assert err["code"] == "stream_not_supported"

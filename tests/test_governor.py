@@ -72,15 +72,18 @@ def test_force_local_only():
 # ── spend computation ────────────────────────────────────────────────────────
 
 
-def test_month_to_date_spend_counts_cloud_and_escalations():
-    # price at gpt-4o-mini: in $0.15/Mtok, out $0.6/Mtok
+def test_month_to_date_spend_counts_only_cloud_routed():
+    # price at the reference model: in $0.15/Mtok, out $0.6/Mtok. Only
+    # route=="cloud" events are month-to-date cloud spend: an escalated LOCAL run
+    # is a signal to step up a tier, not itself a cloud hit — the actual
+    # escalation runs as its own route=="cloud" event, costed once.
     events = [
         _cloud_event(1_000_000, 1_000_000),  # $0.15 + $0.60 = $0.75
-        {  # a local run that escalated → counts as cloud spend
+        {  # a local run that ended escalated → the signal, NOT cloud spend
             "ts": "2026-07-06T00:00:00+00:00", "kind": "generation", "user": "interactive",
             "route": "local", "escalated": True, "tokens_in": 1_000_000,
             "tokens_out": 0, "ok": False, "task_type": "review",
-        },  # $0.15
+        },
         {  # a pure local run → NOT counted
             "ts": "2026-07-06T00:00:00+00:00", "kind": "generation", "user": "interactive",
             "route": "local", "escalated": False, "tokens_in": 1_000_000,
@@ -90,7 +93,7 @@ def test_month_to_date_spend_counts_cloud_and_escalations():
     spend = governor.month_to_date_cloud_spend(
         events, _snapshot(), user="interactive", month="2026-07"
     )
-    assert abs(spend - 0.90) < 1e-6  # 0.75 + 0.15
+    assert abs(spend - 0.75) < 1e-6  # only the route=="cloud" event
 
 
 def test_spend_filters_by_user_and_month():
@@ -191,6 +194,12 @@ def test_idempotent_no_repeat_emit_same_threshold(tmp_path):
     assert emitted.count("budget_governor") == 1
     # the recommendation is still surfaced even when not re-emitting
     assert d2.threshold_crossed == "tighten"
+    # R1: reason is not self-contradictory — it says already fired but the dial
+    # recommendation still applies, and to_dial still equals the tightened target
+    # (per-request tightening is NOT gated on whether telemetry re-emitted).
+    assert "already fired" in d2.reason
+    assert d2.to_dial == d1.to_dial == (2, "lite")
+    assert d2.changed is True  # to_dial still differs from the (2, "std") passed in
 
 
 def test_new_month_resets_idempotency(tmp_path):
