@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="620" viewBox="0 0 860 620" role="img" aria-label="cheapskate: per-task-type model routing and the econ recommendation table">
+  <title>cheapskate: per-task-type model routing + econ recommendation table</title>
+  <desc>A config.yaml snippet mapping task types to roles to local models, and the cheapskate econ table recommending stay-local or mixed per task type with true dollars-per-million-tokens. Illustrative example data.</desc>
+
+  <!-- window -->
+  <rect x="0" y="0" width="860" height="620" rx="12" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="859" height="619" rx="11.5" fill="none" stroke="#30363d" stroke-width="1"/>
+
+  <!-- title bar -->
+  <rect x="0" y="0" width="860" height="40" rx="12" fill="#161b22"/>
+  <rect x="0" y="28" width="860" height="12" fill="#161b22"/>
+  <circle cx="24" cy="20" r="6" fill="#ff5f56"/>
+  <circle cx="46" cy="20" r="6" fill="#ffbd2e"/>
+  <circle cx="68" cy="20" r="6" fill="#27c93f"/>
+  <text x="430" y="25" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#8b949e">cheapskate — you set which model handles each request type</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5">
+
+    <!-- ── config.yaml block ── -->
+    <text x="24" y="68" fill="#8b949e" font-size="12">~/.config/cheapskate/config.yaml + registry.yaml   (task type -&gt; role -&gt; local model)</text>
+
+    <!-- config lines -->
+    <text x="24" y="92"  fill="#7ee787">task_types<tspan fill="#c9d1d9">:</tspan></text>
+    <text x="40" y="112" fill="#79c0ff">summarize<tspan fill="#c9d1d9">, draft, extract </tspan><tspan fill="#c9d1d9">-&gt; role: </tspan><tspan fill="#ffa657">reasoning</tspan></text>
+    <text x="40" y="132" fill="#79c0ff">classify<tspan fill="#c9d1d9">                  -&gt; role: </tspan><tspan fill="#ffa657">classification</tspan></text>
+    <text x="40" y="152" fill="#79c0ff">review<tspan fill="#c9d1d9">, boilerplate       -&gt; role: </tspan><tspan fill="#ffa657">code</tspan></text>
+
+    <text x="24" y="180" fill="#7ee787">roles<tspan fill="#c9d1d9">:  # which local model serves each role</tspan></text>
+    <text x="40" y="200" fill="#ffa657">reasoning<tspan fill="#c9d1d9">      -&gt; </tspan><tspan fill="#a5d6ff">gpt-oss:120b</tspan><tspan fill="#8b949e">      (ollama)</tspan></text>
+    <text x="40" y="220" fill="#ffa657">code<tspan fill="#c9d1d9">           -&gt; </tspan><tspan fill="#a5d6ff">qwen3-coder:30b</tspan><tspan fill="#8b949e">   (ollama)</tspan></text>
+    <text x="40" y="240" fill="#ffa657">classification<tspan fill="#c9d1d9"> -&gt; </tspan><tspan fill="#a5d6ff">qwen3.5:9b-mlx</tspan><tspan fill="#8b949e">    (mlx)</tspan></text>
+    <text x="40" y="260" fill="#ffa657">creative<tspan fill="#c9d1d9">       -&gt; </tspan><tspan fill="#a5d6ff">gemma-4-31b</tspan><tspan fill="#8b949e">       (ollama)</tspan></text>
+
+    <!-- divider -->
+    <line x1="24" y1="284" x2="836" y2="284" stroke="#30363d" stroke-width="1"/>
+
+    <!-- command -->
+    <text x="24" y="312"><tspan fill="#7ee787">$</tspan><tspan fill="#c9d1d9"> cheapskate econ</tspan><tspan fill="#8b949e">   # per-task-type routing recommendation, on your hardware</tspan></text>
+
+    <!-- econ table (monospace, fixed-position columns) -->
+    <text x="24" y="336" fill="#8b949e" xml:space="preserve">task_type     runs  %local retry  escal  tok/s   local$/Mtok cloud$/Mtok recommend</text>
+    <line x1="24" y1="344" x2="836" y2="344" stroke="#30363d" stroke-width="1"/>
+
+    <text x="24" y="366" xml:space="preserve" fill="#c9d1d9"><tspan>boilerplate   5     100%   0%     0%     228.0   </tspan><tspan fill="#8b949e">$0.0082     $2.9012     </tspan><tspan fill="#7ee787">stay-local</tspan></text>
+    <text x="24" y="388" xml:space="preserve" fill="#c9d1d9"><tspan>classify      6     100%   0%     0%     12.9    </tspan><tspan fill="#8b949e">$0.0087     $0.8784     </tspan><tspan fill="#7ee787">stay-local</tspan></text>
+    <text x="24" y="410" xml:space="preserve" fill="#c9d1d9"><tspan>draft         5     100%   20%    0%     79.9    </tspan><tspan fill="#8b949e">$0.0140     $2.0457     </tspan><tspan fill="#7ee787">stay-local</tspan></text>
+    <text x="24" y="432" xml:space="preserve" fill="#c9d1d9"><tspan>review        5     80%    60%    40%    83.6    </tspan><tspan fill="#8b949e">$0.0065     $1.3725     </tspan><tspan fill="#f0883e">mixed</tspan></text>
+    <text x="24" y="454" xml:space="preserve" fill="#c9d1d9"><tspan>summarize     6     83%    17%    0%     57.7    </tspan><tspan fill="#8b949e">$0.0083     $1.3008     </tspan><tspan fill="#7ee787">stay-local</tspan></text>
+
+    <line x1="24" y1="472" x2="836" y2="472" stroke="#30363d" stroke-width="1"/>
+
+    <!-- receipts line -->
+    <text x="24" y="496" fill="#8b949e" font-size="12.5">Receipts</text>
+    <text x="24" y="516" fill="#c9d1d9" font-size="12.5"><tspan>routed </tspan><tspan fill="#7ee787">93% local</tspan><tspan> across 27 runs, saved </tspan><tspan fill="#7ee787">$0.0621</tspan><tspan> vs all-cloud, quality pass </tspan><tspan fill="#7ee787">96%</tspan></text>
+    <text x="24" y="536" fill="#8b949e" font-size="12">cloud priced at reference model gpt-5.4-mini; true cost charges local retries AND cloud escalations</text>
+  </g>
+
+  <!-- caption / illustrative-data banner -->
+  <rect x="0" y="562" width="860" height="58" fill="#161b22"/>
+  <line x1="0" y1="562" x2="860" y2="562" stroke="#30363d" stroke-width="1"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="24" y="586" fill="#f0883e" font-size="12.5">Illustrative example data (seeded demo telemetry), not measured results.</text>
+    <text x="24" y="606" fill="#8b949e" font-size="12">The measured author corpus lives in BENCHMARKS.md. Cost inputs ($/kWh, watts) are example values.</text>
+  </g>
+</svg>

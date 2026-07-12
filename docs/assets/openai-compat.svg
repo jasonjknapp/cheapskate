@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="700" viewBox="0 0 860 700" role="img" aria-label="cheapskate: OpenAI-compatible endpoint, drop-in curl and Python">
+  <title>cheapskate: OpenAI-compatible endpoint (drop-in curl + Python)</title>
+  <desc>A curl request to the broker's /v1/chat/completions with a task_type field, the OpenAI chat-completion JSON it returns, and a five-line Python openai-client variant pointing base_url at the broker.</desc>
+
+  <!-- window -->
+  <rect x="0" y="0" width="860" height="700" rx="12" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="859" height="699" rx="11.5" fill="none" stroke="#30363d" stroke-width="1"/>
+
+  <!-- title bar -->
+  <rect x="0" y="0" width="860" height="40" rx="12" fill="#161b22"/>
+  <rect x="0" y="28" width="860" height="12" fill="#161b22"/>
+  <circle cx="24" cy="20" r="6" fill="#ff5f56"/>
+  <circle cx="46" cy="20" r="6" fill="#ffbd2e"/>
+  <circle cx="68" cy="20" r="6" fill="#27c93f"/>
+  <text x="430" y="25" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#8b949e">cheapskate — call it exactly like a cloud LLM service</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+
+    <!-- ── curl request ── -->
+    <text x="24" y="70" fill="#8b949e" font-size="12">Point any OpenAI client at the local broker. A task_type field opts the request into econ routing.</text>
+
+    <text x="24" y="94"><tspan fill="#7ee787">$</tspan><tspan fill="#c9d1d9"> curl http://127.0.0.1:4747/v1/chat/completions \</tspan></text>
+    <text x="40" y="114" fill="#c9d1d9">-H <tspan fill="#a5d6ff">"Authorization: Bearer $CHEAPSKATE_KEY"</tspan> \</text>
+    <text x="40" y="134" fill="#c9d1d9">-H <tspan fill="#a5d6ff">"Content-Type: application/json"</tspan> \</text>
+    <text x="40" y="154" fill="#c9d1d9">-d <tspan fill="#a5d6ff">'{"model":"auto","task_type":"summarize",</tspan></text>
+    <text x="56" y="174" fill="#a5d6ff">"messages":[{"role":"user","content":"Summarize Q3 notes."}]}'</text>
+
+    <!-- divider -->
+    <line x1="24" y1="192" x2="836" y2="192" stroke="#30363d" stroke-width="1"/>
+
+    <!-- ── JSON response ── -->
+    <text x="24" y="216" fill="#8b949e" font-size="12">Response: a standard OpenAI chat-completion object (any OpenAI SDK parses it unchanged).</text>
+
+    <text x="24" y="240" fill="#c9d1d9"><tspan fill="#c9d1d9">{</tspan></text>
+    <text x="40" y="260" fill="#c9d1d9"><tspan fill="#79c0ff">"id"</tspan>: <tspan fill="#a5d6ff">"cheapskate-summarize"</tspan>,</text>
+    <text x="40" y="280" fill="#c9d1d9"><tspan fill="#79c0ff">"object"</tspan>: <tspan fill="#a5d6ff">"chat.completion"</tspan>,</text>
+    <text x="40" y="300" fill="#c9d1d9"><tspan fill="#79c0ff">"model"</tspan>: <tspan fill="#a5d6ff">"gpt-oss:120b"</tspan>,</text>
+    <text x="40" y="320" fill="#c9d1d9"><tspan fill="#79c0ff">"choices"</tspan>: [{</text>
+    <text x="56" y="340" fill="#c9d1d9"><tspan fill="#79c0ff">"index"</tspan>: <tspan fill="#f0883e">0</tspan>,</text>
+    <text x="56" y="360" fill="#c9d1d9"><tspan fill="#79c0ff">"message"</tspan>: {<tspan fill="#79c0ff">"role"</tspan>: <tspan fill="#a5d6ff">"assistant"</tspan>, <tspan fill="#79c0ff">"content"</tspan>: <tspan fill="#a5d6ff">"Q3 shipped the econ engine..."</tspan>},</text>
+    <text x="56" y="380" fill="#c9d1d9"><tspan fill="#79c0ff">"finish_reason"</tspan>: <tspan fill="#a5d6ff">"stop"</tspan></text>
+    <text x="40" y="400" fill="#c9d1d9">}],</text>
+    <text x="40" y="420" fill="#c9d1d9"><tspan fill="#79c0ff">"usage"</tspan>: {<tspan fill="#79c0ff">"prompt_tokens"</tspan>: <tspan fill="#f0883e">1850</tspan>, <tspan fill="#79c0ff">"completion_tokens"</tspan>: <tspan fill="#f0883e">320</tspan>, <tspan fill="#79c0ff">"total_tokens"</tspan>: <tspan fill="#f0883e">2170</tspan>}</text>
+    <text x="24" y="440" fill="#c9d1d9">}</text>
+
+    <!-- divider -->
+    <line x1="24" y1="460" x2="836" y2="460" stroke="#30363d" stroke-width="1"/>
+
+    <!-- ── python variant ── -->
+    <text x="24" y="484" fill="#8b949e" font-size="12">Same thing, true drop-in: change base_url, keep your existing OpenAI client code.</text>
+
+    <text x="24" y="508" fill="#c9d1d9"><tspan fill="#ff7b72">from</tspan> openai <tspan fill="#ff7b72">import</tspan> OpenAI</text>
+    <text x="24" y="528" fill="#c9d1d9">client = OpenAI(base_url=<tspan fill="#a5d6ff">"http://127.0.0.1:4747/v1"</tspan>, api_key=os.environ[<tspan fill="#a5d6ff">"CHEAPSKATE_KEY"</tspan>])</text>
+    <text x="24" y="548" fill="#c9d1d9">resp = client.chat.completions.create(</text>
+    <text x="40" y="568" fill="#c9d1d9">model=<tspan fill="#a5d6ff">"auto"</tspan>, extra_body={<tspan fill="#a5d6ff">"task_type"</tspan>: <tspan fill="#a5d6ff">"summarize"</tspan>},</text>
+    <text x="40" y="588" fill="#c9d1d9">messages=[{<tspan fill="#a5d6ff">"role"</tspan>: <tspan fill="#a5d6ff">"user"</tspan>, <tspan fill="#a5d6ff">"content"</tspan>: <tspan fill="#a5d6ff">"Summarize Q3 notes."</tspan>}])</text>
+    <text x="24" y="608" fill="#c9d1d9">print(resp.choices[<tspan fill="#f0883e">0</tspan>].message.content)</text>
+  </g>
+
+  <!-- caption -->
+  <rect x="0" y="632" width="860" height="68" fill="#161b22"/>
+  <line x1="0" y1="632" x2="860" y2="632" stroke="#30363d" stroke-width="1"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="24" y="656" fill="#7ee787" font-size="12.5">Endpoint, port 4747, and bearer auth are live. Request/response shape is the shipped contract.</text>
+    <text x="24" y="676" fill="#8b949e" font-size="12">Response body values (content, token counts) are an illustrative example; task_type routes the</text>
+    <text x="24" y="692" fill="#8b949e" font-size="12">request through your dial and safety classes (local, cloud, or a fail-closed refusal).</text>
+  </g>
+</svg>

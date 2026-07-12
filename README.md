@@ -74,6 +74,23 @@ whole reproducibility contract: a stranger clones, installs, and proves the harn
 attaching a single model. To route real work, start a serving engine (e.g. `ollama serve`), run
 `cheapskate serve` to bring up the broker, then `cheapskate task` / point a tool at the endpoint.
 
+## What it looks like
+
+Two things carry the whole idea: you set which model handles each request type, and you call the
+result exactly like a cloud LLM.
+
+<img src="docs/assets/routing.svg" alt="config.yaml maps task types to roles to local models, and cheapskate econ recommends stay-local or mixed per task type with true dollars per million tokens" width="100%">
+
+*You map each task type to a role, and each role to a local model (`config.yaml` + `registry.yaml`);
+`cheapskate econ` then shows the per-task-type routing recommendation and what each route costs on
+your hardware. Figures above are seeded demo data (illustrative, not measured).*
+
+<img src="docs/assets/openai-compat.svg" alt="a curl request to the broker's /v1/chat/completions with a task_type field, the OpenAI chat-completion JSON it returns, and a five-line Python openai-client variant" width="100%">
+
+*Point any OpenAI client's `base_url` at the broker (curl, the `openai` SDK, anything). A `task_type`
+field opts the request into econ routing (local, cloud, or a fail-closed refusal); drop it and it is
+a plain role/model proxy.*
+
 ## The spend dial
 
 Routing policy is first-class, machine-readable state; one setting governs where work goes. Read
