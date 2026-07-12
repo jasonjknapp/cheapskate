@@ -118,6 +118,26 @@ class UserProfile(BaseModel):
     quota: UserQuota = Field(default_factory=UserQuota)
 
 
+class ProviderConfig(BaseModel):
+    """A cloud model provider — a thin adapter target, OFF by default.
+
+    ``kind`` selects the adapter: ``openai-compat`` drives any OpenAI-compatible
+    HTTP API (OpenAI, OpenRouter, a Gemini OpenAI-compat endpoint, …) via
+    ``base_url``; ``anthropic`` drives Claude through the Anthropic SDK.
+
+    ``model_map`` maps a router *role* (e.g. ``reasoning``, ``code``) to that
+    provider's concrete model id. ``api_key_env`` names the environment variable
+    the secret is read from — the key itself NEVER lives in config.yaml or the
+    repo (Hard rule 3). ``enabled`` is False by default so a shipped install
+    reaches the cloud only after a deliberate opt-in."""
+
+    kind: str = "openai-compat"  # openai-compat | anthropic
+    base_url: str | None = None  # required for openai-compat; optional override for anthropic
+    model_map: dict[str, str] = Field(default_factory=dict)  # role -> concrete model id
+    api_key_env: str | None = None  # name of the env var holding the secret
+    enabled: bool = False  # OFF by default — a shipped install never reaches cloud unbidden
+
+
 class EconConfig(BaseModel):
     """Economics inputs the cost engine needs but cannot measure for free.
 
@@ -194,6 +214,10 @@ class Config(BaseModel):
     )
     never_cloud: list[str] = Field(default_factory=list)
     users: dict[str, UserProfile] = Field(default_factory=_default_users)
+    # Cloud providers — every entry OFF by default (BYO keys via env). A shipped
+    # install reaches the cloud only after an operator enables a provider AND
+    # sets its api_key_env in the environment.
+    providers: dict[str, ProviderConfig] = Field(default_factory=dict)
 
 
 # ── deep-merge + load ────────────────────────────────────────────────────────

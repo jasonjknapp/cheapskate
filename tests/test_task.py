@@ -35,14 +35,20 @@ def test_never_cloud_refuses_at_level_0():
         task.run("secrets", "crit", "data", cfg, dial=(0, None), complete=lambda *a, **k: "x")
 
 
-def test_cloud_route_returns_descriptor_without_calling_model():
+def test_cloud_route_with_no_enabled_provider_fails_closed():
+    # S3: a cloud route (dial level 0) with no enabled provider is a HARD error
+    # (CloudUnavailable), never a silent local downgrade. The local model is
+    # never called.
     cfg = Config()
     called = []
-    res = task.run("summarize", "crit", "data", cfg, dial=(0, None),
-                   complete=lambda *a, **k: called.append(1) or "x")
-    assert res["route"] == "cloud-downgraded"
-    assert res["output"] is None
-    assert not called
+    with pytest.raises(task.CloudUnavailable) as e:
+        task.run(
+            "summarize", "crit", "data", cfg, dial=(0, None),
+            complete=lambda *a, **k: called.append(1) or "x",
+            govern=lambda *a, **k: None,  # no governor tightening
+        )
+    assert "provider" in str(e.value).lower()  # actionable message
+    assert not called  # no silent local fallback
 
 
 def test_local_success_first_try():

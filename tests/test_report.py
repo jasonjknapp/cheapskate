@@ -69,11 +69,14 @@ def test_collect_stats_tokens_per_sec(tmp_path):
     assert stats["summarize"].tokens_per_sec == pytest.approx(250.0)
 
 
-def test_task_run_events_are_treated_as_generations():
-    # router emits kind="task.run"; the report must consume it too
-    evt = _gen(kind="task.run")
-    stats = report.collect_stats([evt])
-    assert stats["summarize"].runs == 1
+def test_task_run_summary_is_not_double_counted():
+    # S3 double-counting decision: the router emits one kind="generation" event
+    # per ATTEMPT (the costable unit) PLUS a kind="task.run" SUMMARY per run. The
+    # report costs ONLY "generation" so an attempt is never counted twice; the
+    # "task.run" summary is deliberately excluded from stats.
+    events = [_gen(kind="generation"), _gen(kind="task.run")]
+    stats = report.collect_stats(events)
+    assert stats["summarize"].runs == 1  # only the generation event was costed
 
 
 def test_month_filter(tmp_path):

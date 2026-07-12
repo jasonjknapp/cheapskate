@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 cheapskate = "cheapskate.cli:main"

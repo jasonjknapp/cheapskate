@@ -32,12 +32,24 @@ src/cheapskate/
 │   ├── registry.py   registry.yaml: roles → {model, backend, fallback, quarantine}; atomic writes
 │   └── currency.py   discover (HF) → evaluate (YOUR eval suite) → promote/rollback;
 │                     incumbent + fallback + rollback targets are NEVER pruned
+├── cloud/
+│   ├── __init__.py   public surface: dispatch_role(), provider_for_role(), CloudError
+│   └── adapters.py   thin cloud tier: openai-compat + anthropic adapters (lazy SDK imports,
+│                     env-only secrets, OFF by default) → uniform {text, model, tokens, latency}
+├── mcp_server.py     stdio MCP server (cheapskate mcp): run_task + econ_report tools, thin
+│                     over router/task + econ/report (needs the 'mcp' extra)
 ├── client.py         python API: complete(), generate_json() — via broker, graceful degrade
-└── cli.py            argparse CLI: dial · models · task · serve · doctor · report (stub in v0.1)
+└── cli.py            argparse CLI: dial · models · task · serve · mcp · doctor · econ · report
 ```
 
-Out of scope in S1 (later sessions): econ engine math (S2), cloud adapters + OpenAI-compatible
-endpoint + MCP server (S3), eval harness + doctor full checks (S4).
+The broker's `/v1/chat/completions` doubles as the drop-in OpenAI-compatible adoption surface: a
+`task_type` extension field opts a request into econ routing (dial + safety classes + cloud
+dispatch); otherwise it is a direct role/model proxy. `router/task.py` executes both local and
+cloud routes (fail-closed both directions), consults the budget governor before a cloud dispatch,
+and emits a `kind="generation"` event per attempt (the econ report/governor cost only that kind;
+`kind="task.run"` is a per-run summary, not re-counted).
+
+Out of scope until later sessions: eval harness + `doctor` full checks + CI (S4).
 
 ## Contracts (both extraction agents code against these)
 

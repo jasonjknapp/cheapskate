@@ -6,9 +6,15 @@ monthly receipts summary, and the content-free ``--share`` aggregate.
 Input schema (the content-free feed the telemetry writer emits): one JSON line
 per event. We consume ``kind == "generation"`` events with fields
 ``model, backend, machine_id, task_type, user, route, duration_s, tokens_in,
-tokens_out, retries, escalated, ok``. (``kind == "task.run"`` from the router is
-also accepted as a generation event so the report works before a dedicated
-generation emitter exists.)
+tokens_out, retries, escalated, ok``.
+
+Double-counting decision (S3): the router now emits one ``kind="generation"``
+event PER ATTEMPT (the costable unit) plus a ``kind="task.run"`` SUMMARY event
+per run. To count each attempt exactly once, the report + governor cost ONLY
+``kind="generation"`` events; ``task.run`` is a backward-compat summary that is
+deliberately NOT folded into stats or spend. (Before S3 the router emitted only
+``task.run`` and the report costed it directly; that bridge is retired now that
+a dedicated per-attempt emitter exists.)
 
 HARD RULE — ``--share`` is content-free BY CONSTRUCTION. It emits ONLY aggregate
 numbers, model names, and ``machine_id``. It never reads or emits any free-text
@@ -31,7 +37,10 @@ from . import costmath, pricing
 from .power import PowerReading, read_power
 
 # Event kinds we treat as a "generation" (a routed model call worth costing).
-_GENERATION_KINDS = frozenset({"generation", "task.run"})
+# ONLY "generation" is costed: the router emits one such event per attempt (the
+# costable unit). "task.run" is a per-run SUMMARY the router also emits — it is
+# deliberately excluded here so an attempt is never counted twice (S3 decision).
+_GENERATION_KINDS = frozenset({"generation"})
 
 # The ONLY fields --share is ever allowed to read off a raw event. Anything
 # outside this allowlist (i.e. any free-text field) is structurally unreachable

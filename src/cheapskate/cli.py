@@ -129,6 +129,26 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── mcp ──────────────────────────────────────────────────────────────────────
+
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    """Run the stdio MCP server (needs the 'mcp' extra). Exposes run_task and
+    econ_report to any MCP client (a code assistant, an agent CLI)."""
+    cfg = _config.load()
+    try:
+        from . import mcp_server
+    except Exception as exc:  # noqa: BLE001
+        _print({"error": f"mcp server unavailable: {type(exc).__name__}: {exc}"})
+        return 1
+    try:
+        mcp_server.serve(cfg)
+    except ImportError as exc:
+        _print({"error": str(exc)})
+        return 1
+    return 0
+
+
 # ── doctor ───────────────────────────────────────────────────────────────────
 
 
@@ -279,6 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--in", dest="infile", default="-", help="input payload (file, or - for stdin)")
 
     sub.add_parser("serve", help="run the broker daemon (needs broker deps)")
+    sub.add_parser("mcp", help="run the stdio MCP server (needs the 'mcp' extra)")
     sub.add_parser("doctor", help="check config, dirs, and backend reachability")
 
     e = sub.add_parser("econ", help="per-task-type routing recommendation table")
@@ -312,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_task(args)
     if args.cmd == "serve":
         return _cmd_serve(args)
+    if args.cmd == "mcp":
+        return _cmd_mcp(args)
     if args.cmd == "doctor":
         return _cmd_doctor(args)
     if args.cmd == "econ":

@@ -112,6 +112,170 @@ def enforce_capacity(spec: BackendSpec, budget_gb: float) -> tuple[str, str]:
     return (action, reason)
 
 
+# ── OpenAI-payload + task_type routing (module-level so they stay testable) ──
+
+
+def plan_task_type_route(config: Any, task_type: str, dial: Any = None) -> dict:
+    """Pure planner for a ``task_type``-tagged OpenAI request. Runs the router's
+    routing decision and maps it to a broker action, WITHOUT any ASGI/HTTP
+    dependency so it is directly unit-testable.
+
+    Returns a dict with ``action`` ∈ {refuse, cloud, local} plus:
+      * refuse → ``status`` (HTTP code) and ``error`` (message), ``class``.
+      * cloud  → ``decision`` (the route decision, incl. role).
+      * local  → ``decision`` and ``model`` (the ``role:<name>`` to pin, or None).
+    """
+    from ..router import routes as _routes
+    from ..router.dial import read_dial as _read_dial
+
+    if dial is None:
+        try:
+            dial = _read_dial(config)
+        except Exception:  # noqa: BLE001 — a bad dial file must not break the request
+            dcfg = _get(config, "dial", None)
+            level = _get(dcfg, "default_level", 2)
+            sub = _get(dcfg, "default_sub_dial", "std")
+            dial = (level, sub)
+
+    decision = _routes.route_decision(task_type, dial, config)
+    route = decision["route"]
+
+    if route == _routes.REFUSE_NEVER_LOCAL:
+        return {
+            "action": "refuse", "status": 422, "class": "never_local",
+            "error": f"task_type {task_type!r} is never_local: {decision['reason']}",
+        }
+    if route == _routes.REFUSE_NEVER_CLOUD:
+        return {
+            "action": "refuse", "status": 422, "class": "never_cloud",
+            "error": f"task_type {task_type!r} is never_cloud: {decision['reason']}",
+        }
+    if route in (_routes.CLOUD, _routes.CLOUD_DOWNGRADED):
+        return {"action": "cloud", "decision": decision}
+    # local / unknown
+    model = None
+    if route == _routes.LOCAL:
+        model = f"role:{decision.get('role', 'reasoning')}"
+    return {"action": "local", "decision": decision, "model": model}
+
+
+def cloud_dispatch_openai(
+    config: Any,
+    body: dict,
+    decision: dict,
+    task_type: str,
+    *,
+    max_tokens_floor: int,
+    dispatch: Any = None,
+    log: Any = None,
+) -> tuple[int, dict]:
+    """Dispatch a cloud-routed OpenAI payload and return ``(status_code, body)``
+    as plain data (no ASGI dependency). A missing/disabled provider or provider
+    failure is a fail-closed 502 — never a local fallback. ``dispatch`` is the
+    injectable cloud dispatch (defaults to :func:`cheapskate.cloud.dispatch_role`);
+    ``log`` is an optional telemetry callback."""
+    if dispatch is None:
+        from ..cloud import dispatch_role as dispatch
+
+    from ..cloud import CloudError
+
+    def _emit(**fields):
+        if log is not None:
+            log("generation", **fields)
+
+    role = decision.get("role", "reasoning")
+    messages = body.get("messages") or []
+    prompt = _last_user_text(messages)
+    system = _system_text(messages)
+    start = time.monotonic()
+    try:
+        result = dispatch(
+            config, role, prompt,
+            system=system,
+            temperature=float(body.get("temperature", 0.2)),
+            max_tokens=int(body.get("max_tokens") or max_tokens_floor),
+        )
+    except CloudError as e:
+        _emit(task_type=task_type, route="cloud", ok=False, error=str(e), status_code=502)
+        return (502, {"error": str(e)})
+    except Exception as e:  # noqa: BLE001
+        _emit(task_type=task_type, route="cloud", ok=False,
+              error=f"{type(e).__name__}: {e}", status_code=502)
+        return (502, {"error": f"cloud dispatch failed: {e}"})
+    _emit(task_type=task_type, route="cloud", model=result.model, ok=True,
+          latency_s=round(time.monotonic() - start, 3),
+          tokens_in=result.tokens_in, tokens_out=result.tokens_out)
+    return (200, _openai_chat_shape(result, task_type))
+
+
+def _last_user_text(messages: list) -> str:
+    """The most recent user message's text from an OpenAI messages array."""
+    for msg in reversed(messages or []):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):  # content-parts form
+                return "".join(
+                    p.get("text", "") for p in content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+    return ""
+
+
+def _system_text(messages: list) -> str | None:
+    """Concatenated system-message text from an OpenAI messages array, or None."""
+    parts = [
+        m.get("content", "")
+        for m in (messages or [])
+        if isinstance(m, dict) and m.get("role") == "system" and isinstance(m.get("content"), str)
+    ]
+    joined = "\n".join(p for p in parts if p)
+    return joined or None
+
+
+def _openai_chat_shape(result: Any, task_type: str) -> dict:
+    """Shape a cloud :class:`CloudResult` as an OpenAI chat-completion object."""
+    return {
+        "id": f"cheapskate-{task_type}",
+        "object": "chat.completion",
+        "model": result.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": result.text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": result.tokens_in or 0,
+            "completion_tokens": result.tokens_out or 0,
+            "total_tokens": (result.tokens_in or 0) + (result.tokens_out or 0),
+        },
+    }
+
+
+class _RequestWithBody:
+    """Wraps a Starlette Request so ``_proxy_generation`` re-reads an already
+    parsed+mutated JSON body (the request body stream is single-use). Delegates
+    everything else — headers, client — to the real request."""
+
+    def __init__(self, request: Any, body: dict) -> None:
+        self._request = request
+        self._body = body
+
+    async def json(self) -> dict:
+        return self._body
+
+    @property
+    def headers(self):
+        return self._request.headers
+
+    @property
+    def client(self):
+        return self._request.client
+
+
 def prepare_backend(spec: BackendSpec, budget_gb: float, config: Any = None) -> str:
     """Ensure the backend for ``spec`` is up and return its OpenAI base URL
     (``.../v1``). For MLX this LOADS the model through the backend lifecycle
@@ -335,7 +499,60 @@ def build_app(config: Any = None):
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request):
+        # The drop-in adoption surface: any OpenAI-client tool pointed at the
+        # broker gets econ routing. A ``task_type`` extension field routes the
+        # request through the dial/task_types machinery (local vs cloud, safety
+        # classes); otherwise it is a direct role/model resolution proxied local.
+        cls, user = _auth(request)
+        if not cls:
+            return JSONResponse({"error": "invalid or missing API key"}, status_code=401)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+
+        if body.get("stream"):
+            # Streaming through the task_type econ path is not implemented; a
+            # concrete-model/role stream still works via the direct local proxy.
+            if body.get("task_type"):
+                return JSONResponse(
+                    {"error": "stream=true is not supported with a task_type "
+                              "(econ routing); omit task_type to stream a concrete "
+                              "model/role, or set stream=false"},
+                    status_code=501,
+                )
+
+        task_type = body.get("task_type")
+        if task_type:
+            return await _route_task_type(request, body, task_type, user)
         return await _proxy_generation(request, "/chat/completions")
+
+    async def _route_task_type(request, body, task_type: str, user: str):
+        """Run the OpenAI-payload request through the router's routing decision
+        (module-level :func:`plan_task_type_route`). A cloud route is dispatched
+        via the cloud adapter and returned in OpenAI shape; a local route is
+        proxied to the local backend. Safety classes fail closed with a clear
+        HTTP status."""
+        plan = plan_task_type_route(config, task_type)
+        action = plan["action"]
+
+        if action == "refuse":
+            _log("generation", task_type=task_type, route="refused", user=user,
+                 ok=False, error=plan["class"], status_code=plan["status"])
+            return JSONResponse({"error": plan["error"]}, status_code=plan["status"])
+
+        if action == "cloud":
+            status, out = await asyncio.to_thread(
+                cloud_dispatch_openai, config, body, plan["decision"], task_type,
+                max_tokens_floor=max_tokens_floor,
+                log=lambda kind, **f: _log(kind, user=user, **f),
+            )
+            return JSONResponse(out, status_code=status)
+
+        # local / unknown → proxy locally, pinning the route's role when known.
+        if plan.get("model") and not body.get("model"):
+            body["model"] = plan["model"]
+        return await _proxy_generation(_RequestWithBody(request, body), "/chat/completions")
 
     @app.post("/v1/embeddings")
     async def embeddings(request: Request):
