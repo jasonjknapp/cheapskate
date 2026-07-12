@@ -47,6 +47,13 @@ def test_d1_resolve_unknown_role_prefix_raises():
         resolve(model="role:does-not-exist", config={"roles": {}})
 
 
+def test_d1_role_pointing_at_another_role_is_rejected():
+    # A misconfigured role whose model is itself a role: pointer must fail with a
+    # clear error, not resolve to a literal that 404s downstream.
+    with pytest.raises(LocalUnavailable, match="not a concrete model"):
+        resolve(model="role:a", config={"roles": {"a": {"model": "role:b"}}})
+
+
 def test_d1_plain_model_id_unaffected():
     spec = resolve(model="qwen3:4b", config={"roles": {}})
     assert spec.model == "qwen3:4b"
@@ -117,14 +124,19 @@ def test_d5_local_run_records_token_counts(_quiet_telemetry):
     assert tokened[0]["tokens_out"] == 17
 
 
-def test_d5_bare_string_completion_has_no_tokens(_quiet_telemetry):
+def test_d5_bare_string_completion_records_no_tokens(_quiet_telemetry):
     cfg = Config()
-    task.run(
+    res = task.run(
         "summarize", "crit", "data", cfg, dial=(3, None),
         complete=lambda *a, **k: "plain answer",
     )
-    # No token fields asserted present; the run must still succeed.
-    assert any(k.get("tokens_in") is None for (a, k) in _quiet_telemetry) or True
+    assert res["ok"] is True and res["output"] == "plain answer"
+    # A bare-string completion carries no token counts, so no generation event
+    # may report a non-None tokens_in/tokens_out.
+    for (a, k) in _quiet_telemetry:
+        if a and a[0] == "generation":
+            assert k.get("tokens_in") is None
+            assert k.get("tokens_out") is None
 
 
 # ── completion normalizers ─────────────────────────────────────────────────────

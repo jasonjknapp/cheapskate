@@ -165,6 +165,13 @@ def resolve(
         model_name = _get(spec, "model") if spec is not None else None
         if not model_name:
             raise LocalUnavailable(f"role {role!r} has no model configured")
+        if isinstance(model_name, str) and model_name.startswith("role:"):
+            # A role entry whose model is itself a role: pointer is a config error;
+            # resolving it as a literal would 404 downstream with no clear cause.
+            raise LocalUnavailable(
+                f"role {role!r} maps to {model_name!r}, which is not a concrete "
+                f"model id (a role must point at a real model, not another role)"
+            )
         backend = _get(spec, "backend") or infer_backend(model_name)
         return BackendSpec(
             model=model_name,

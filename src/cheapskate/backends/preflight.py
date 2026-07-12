@@ -161,9 +161,13 @@ def ensure_role(
             approx_gb=spec.approx_gb, role=spec.role, quant=spec.quant,
         )
     if spec.backend == "ollama":
-        # Fast path: already resident (loaded) OR already pulled (Ollama's daemon
-        # auto-loads a pulled model on request), so nothing to fetch.
-        if ollama.ollama_model_resident(spec.model) or model_present(spec.model):
+        # Hot path: one probe. A PULLED model is all we need — the Ollama daemon
+        # auto-loads it on request, so residency (is-it-in-VRAM) is irrelevant to
+        # whether it will serve. We deliberately do NOT also probe `ollama ps`
+        # here (that was a second per-request subprocess for no benefit). If
+        # auto_pull is off, an absent model is a hard, actionable error and we
+        # never even reach the pull path.
+        if model_present(spec.model):
             return spec
         if not _auto_pull_enabled(config):
             raise LocalUnavailable(

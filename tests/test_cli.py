@@ -65,6 +65,27 @@ def test_task_local_failure_surfaces_error_and_nonzero_exit(capsys, monkeypatch)
     assert "cheapskate serve" in payload["error"]  # actionable hint
 
 
+def test_task_empty_output_even_when_ok_is_error(capsys, monkeypatch):
+    # A run that "succeeds" (ok=True) but produced no output is not a usable
+    # result: the CLI must surface it as an error with a non-zero exit, not print
+    # a silent {"output": null, "ok": true} with exit 0.
+    from cheapskate import cli as cli_mod
+
+    def fake_run(task_type, criteria, payload, cfg, **kw):
+        return {"task_type": task_type, "route": "local", "role": "reasoning",
+                "output": None, "ok": True, "retries": 0, "escalated": False,
+                "error_kind": None}
+
+    monkeypatch.setattr(cli_mod._task, "run", fake_run)
+    code = cli.main([
+        "task", "run", "--task-type", "summarize",
+        "--criteria", "crit", "--in", "payload",
+    ])
+    assert code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert "error" in payload and "no output" in payload["error"]
+
+
 def test_task_never_local_refuses_cleanly(capsys):
     # A never_local task type refuses without a traceback and exits non-zero.
     code = cli.main([

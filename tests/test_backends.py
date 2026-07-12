@@ -468,17 +468,25 @@ def test_ensure_role_no_pull_when_already_present(monkeypatch):
     assert pulls == []  # nothing pulled
 
 
-def test_ensure_role_no_pull_when_resident(monkeypatch):
-    monkeypatch.setattr(ollamamod, "ollama_model_resident", lambda *_a, **_k: True)
+def test_ensure_role_no_pull_when_present(monkeypatch):
+    # A model that is PULLED (present on disk) needs no fetch: the Ollama daemon
+    # auto-loads it on request. The hot path checks presence with a single probe
+    # and does not also probe residency (`ollama ps`).
+    ps_calls = []
+    monkeypatch.setattr(
+        ollamamod, "ollama_model_resident",
+        lambda *_a, **_k: ps_calls.append(1) or True,
+    )
     pulls = []
     spec = pf.ensure_role(
         role="code", config=_OLLAMA_ROLE_CFG, budget_gb=100.0,
         pull=lambda m: pulls.append(m) or True,
-        model_present=lambda _m: False,
+        model_present=lambda _m: True,
         free_disk=lambda: 500.0,
     )
     assert spec.model == "org/coder:30b"
     assert pulls == []
+    assert ps_calls == []  # residency is NOT probed on the hot path
 
 
 def test_ensure_role_pull_failure_raises(monkeypatch):
