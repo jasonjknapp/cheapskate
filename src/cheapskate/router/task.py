@@ -37,6 +37,7 @@ costable unit the econ report/governor consume) plus a backward-compat
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Callable
 
@@ -49,10 +50,12 @@ from .dial import read_dial
 # self-reported confidence + criteria flag alongside the output.
 ENVELOPE_SYSTEM = (
     "You are a worker model in a supervised pipeline. Satisfy the ACCEPTANCE "
-    "CRITERIA exactly. Return ONLY a JSON object: "
+    "CRITERIA exactly. Prefer to return a single JSON object: "
     '{"output": <your answer as a string, or the requested JSON value>, '
     '"self_confidence": <number 0..1, your honest estimate you met every criterion>, '
-    '"criteria_met": <true|false>}. No prose outside the JSON.'
+    '"criteria_met": <true|false>}. '
+    "If you cannot produce clean JSON, just return the answer as plain text: it "
+    "will be accepted as the output. Do not wrap the JSON in markdown fences."
 )
 
 # The verify hook: (output, criteria) -> (ok, feedback). ok True accepts; False
@@ -91,33 +94,102 @@ def _build_prompt(criteria: str, payload: str, feedback: str | None = None) -> s
     return "\n\n".join(parts)
 
 
+def _strip_reasoning(text: str) -> str:
+    """Drop a leading ``<think>…</think>`` block that reasoning models emit
+    before their real answer. Only a leading block is removed; if the tags are
+    absent the text is returned unchanged."""
+    m = re.match(r"\s*<think>.*?</think>\s*", text, flags=re.DOTALL | re.IGNORECASE)
+    return text[m.end():] if m else text
+
+
+def _extract_json_object(text: str) -> str | None:
+    """The first balanced ``{…}`` object in ``text`` (spanning strings/escapes
+    correctly), or None. Lets us find an envelope a model wrapped in prose or
+    markdown fences without a brittle regex."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def _parse_envelope(content: str) -> dict[str, Any]:
-    """Best-effort parse of the worker's JSON envelope; wrap raw text if it
-    isn't valid JSON with an ``output`` key."""
-    try:
-        obj = json.loads(content)
+    """Best-effort parse of the worker's JSON envelope. Tolerates a leading
+    reasoning block, markdown ```` ```json ```` fences, and prose around the
+    object. Falls back to treating the cleaned text as the plain-text output
+    (with unknown confidence) when no ``{"output": …}`` envelope is present, so
+    a small model that just answers in prose still works."""
+    cleaned = _strip_reasoning(content or "")
+    # Try the whole (cleaned) string, then the first balanced JSON object found
+    # inside it (covers fenced ```json …``` and prose-wrapped envelopes).
+    for candidate in (cleaned, _extract_json_object(cleaned)):
+        if not candidate:
+            continue
+        try:
+            obj = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
         if isinstance(obj, dict) and "output" in obj:
             return {
                 "output": obj["output"],
                 "self_confidence": obj.get("self_confidence"),
                 "criteria_met": obj.get("criteria_met"),
             }
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return {"output": content, "self_confidence": None, "criteria_met": None}
+    return {"output": cleaned.strip() or None, "self_confidence": None, "criteria_met": None}
 
 
 def _default_complete() -> CompleteFn:
     # Bound lazily so importing this module never pulls in the client (and its
     # broker dependency); tests inject ``complete=`` and never hit this.
-    # client.complete returns a rich dict ({text, model, latency_s, ...});
-    # the task contract is text-in/text-out, so adapt here.
+    # client.complete returns a rich dict ({text, eval_count, prompt_eval_count,
+    # ...}); we return the whole dict so _run_local can record token counts for
+    # the econ receipt. _completion_text/_completion_tokens normalize both a
+    # bare string (the historical contract, still honored for injected fns) and
+    # this dict.
     from .. import client
 
-    def _text_complete(prompt: str, **kwargs: Any) -> str:
-        return client.complete(prompt, **kwargs)["text"]
+    def _rich_complete(prompt: str, **kwargs: Any) -> dict[str, Any]:
+        return client.complete(prompt, **kwargs)
 
-    return _text_complete
+    return _rich_complete
+
+
+def _completion_text(raw: Any) -> str:
+    """The answer text from a completion that may be a bare string (injected
+    test fns, the historical contract) or the client's rich dict."""
+    if isinstance(raw, dict):
+        return raw.get("text") or ""
+    return raw if isinstance(raw, str) else _as_text(raw)
+
+
+def _completion_tokens(raw: Any) -> tuple[int | None, int | None]:
+    """``(tokens_in, tokens_out)`` from a rich completion dict, or ``(None, None)``
+    for a bare-string completion. Ollama reports ``prompt_eval_count`` /
+    ``eval_count``; the client surfaces them under those keys."""
+    if isinstance(raw, dict):
+        ti = raw.get("prompt_eval_count")
+        to = raw.get("eval_count")
+        return (int(ti) if ti is not None else None,
+                int(to) if to is not None else None)
+    return (None, None)
 
 
 def _default_cloud_dispatch() -> CloudDispatchFn:
@@ -298,7 +370,8 @@ def _run_local(
                 error_kind=attempt_error,
             )
             continue
-        last_env = _parse_envelope(raw)
+        last_env = _parse_envelope(_completion_text(raw))
+        tokens_in, tokens_out = _completion_tokens(raw)
         if verify is None:
             ok = attempt_ok = True
         else:
@@ -312,7 +385,7 @@ def _run_local(
             task_type, "local", role, user,
             retries=attempts - 1, escalated=(is_last and not attempt_ok), ok=attempt_ok,
             duration_s=round(time.monotonic() - attempt_started, 3),
-            error_kind=attempt_error,
+            error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
         )
         if attempt_ok:
             break
@@ -344,6 +417,7 @@ def _run_local(
         "escalated": escalated,
         "escalation_patience": patience,
         "duration_s": duration_s,
+        "error_kind": error_kind if not ok else None,
         "reminder": "caller verifies output vs criteria; escalated=True means escalate to a stronger tier",
     }
 
@@ -461,6 +535,7 @@ def _run_cloud(
         "duration_s": duration_s,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "error_kind": error_kind if not ok else None,
         "reminder": "caller verifies output vs criteria; escalated=True means escalate to a stronger tier",
     }
 

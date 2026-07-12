@@ -7,21 +7,33 @@ import importlib
 from cheapskate import client as client_mod
 from cheapskate.broker.app import _budget_gb
 from cheapskate.registry import registry as registry_mod
-from cheapskate.router.task import _default_complete
+from cheapskate.router.task import (
+    _completion_text,
+    _completion_tokens,
+    _default_complete,
+)
 
 # The backends package re-exports the resolve FUNCTION, shadowing the submodule
 # on attribute access — import the module explicitly.
 resolve_mod = importlib.import_module("cheapskate.backends.resolve")
 
 
-def test_default_complete_adapts_client_dict_to_text(monkeypatch):
-    """client.complete returns a rich dict; the task layer's default path must
-    hand the router plain text."""
+def test_default_complete_preserves_rich_dict_for_token_capture(monkeypatch):
+    """client.complete returns a rich dict; the task layer's default path now
+    preserves it (so token counts reach the econ receipt), and the normalizers
+    extract text and tokens from it."""
     monkeypatch.setattr(
-        client_mod, "complete", lambda prompt, **kw: {"text": "adapted!", "model": "m"}
+        client_mod, "complete",
+        lambda prompt, **kw: {"text": "adapted!", "model": "m",
+                              "prompt_eval_count": 12, "eval_count": 7},
     )
     fn = _default_complete()
-    assert fn("hi", system="s", role="reasoning") == "adapted!"
+    raw = fn("hi", system="s", role="reasoning")
+    assert _completion_text(raw) == "adapted!"
+    assert _completion_tokens(raw) == (12, 7)
+    # A bare-string completion (the historical injected-fn contract) still works.
+    assert _completion_text("plain") == "plain"
+    assert _completion_tokens("plain") == (None, None)
 
 
 def test_roles_fall_back_to_registry_yaml(tmp_path, monkeypatch):

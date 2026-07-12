@@ -3,8 +3,12 @@
 
 The preflight is the one entry point a consumer calls to be sure the correct
 backend is serving the correct model. For MLX it drives the single-large-model
-lifecycle (de-load co-residents, flock, spawn); for Ollama it validates
-residency only (the daemon auto-loads on request) and NEVER pulls.
+lifecycle (de-load co-residents, flock, spawn); for Ollama the daemon auto-loads
+a PRESENT model on request, so the preflight guarantees presence: an absent
+Ollama model is fetched on demand via ``ollama pull``, gated by the same
+fail-closed disk/size/RAM budget as model currency (and skippable with
+``machine.auto_pull: false``). MLX fetch-on-demand is not built yet; an absent
+MLX model raises with the acquisition path named.
 
 ``evict_coresidents`` is the cross-runtime memory-safety primitive: before a
 large MLX load it de-loads models resident in OTHER runtimes so the combined

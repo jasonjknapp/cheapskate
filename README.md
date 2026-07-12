@@ -98,8 +98,48 @@ cheapskate eval
 
 `doctor` exits 0, `make test` is green, and `cheapskate eval` prints `"gate": "PASS"`. That is the
 whole reproducibility contract: a stranger clones, installs, and proves the harness works before
-attaching a single model. To route real work, start a serving engine (e.g. `ollama serve`), run
-`cheapskate serve` to bring up the broker, then `cheapskate task` / point a tool at the endpoint.
+attaching a single model.
+
+## Route a real task in 2 minutes (one small model)
+
+The offline quickstart proves the harness. This routes an actual task to an actual local model, on
+hardware you already have. It uses a ~3 GB model so a 16 GB machine can run it; nothing here needs a
+big fleet.
+
+```bash
+# 1. Pull one small model (Ollama). ~3 GB.
+ollama pull qwen3:4b
+
+# 2. Point a role at it. Create ~/.config/cheapskate/config.yaml:
+mkdir -p ~/.config/cheapskate
+cat > ~/.config/cheapskate/config.yaml <<'YAML'
+roles:
+  reasoning:
+    model: qwen3:4b
+    backend: ollama
+    approx_gb: 3.0
+YAML
+cheapskate models list   # 'reasoning' now shows model qwen3:4b, source: config
+
+# 3. Start the broker. On first run it provisions a local key (mode-600) and
+#    prints where it saved it; the CLI and client use it automatically.
+cheapskate serve &        # leave it running; Ctrl-C to stop
+
+# 4. Route a real task. It resolves the role to qwen3:4b, runs it locally, and
+#    returns the answer with a self-reported confidence.
+echo "The Eiffel Tower is an iron tower in Paris, built 1887-1889." > /tmp/note.txt
+cheapskate task --task-type summarize \
+  --criteria "Summarize in one short sentence." --in /tmp/note.txt
+
+# 5. Read your first receipt: what ran local, and what it would have cost on the cloud.
+cheapskate econ
+```
+
+Step 4 returns `{"output": "...", "ok": true, "route": "local", ...}`. Step 5 shows a per-task-type
+table with the cloud-equivalent cost of what you just ran locally. If a role points at a model you
+have not pulled, the broker fetches it on first use (behind a disk/RAM safety gate); disable that
+with `machine.auto_pull: false`. If `cheapskate task` reports the broker is unreachable, step 3 is
+not running.
 
 ## What it looks like
 

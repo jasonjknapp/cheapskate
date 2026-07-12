@@ -45,6 +45,8 @@ from .gates import (
     ModelAwareGate,
     PriorityGate,
     class_for_key,
+    genkey,
+    keys_path,
     load_keys,
     priority_of,
 )
@@ -333,10 +335,11 @@ class _RequestWithBody:
 def prepare_backend(spec: BackendSpec, budget_gb: float, config: Any = None) -> str:
     """Ensure the backend for ``spec`` is up and return its OpenAI base URL
     (``.../v1``). For MLX this LOADS the model through the backend lifecycle
-    (flock, foreign guard, eviction, one-large-model). BLOCKING — call via a
-    thread. Raises :class:`LocalUnavailable` on failure."""
-    if spec.backend == "ollama":
-        return spec.endpoint.rstrip("/") + "/v1"
+    (flock, foreign guard, eviction, one-large-model). For Ollama the daemon
+    auto-loads a present model on request, so this only needs to guarantee the
+    model is PRESENT: ``ensure_role`` gate-pulls an absent Ollama model (behind
+    the fail-closed disk/size/RAM gate) before the request reaches the daemon.
+    BLOCKING — call via a thread. Raises :class:`LocalUnavailable` on failure."""
     resolved = ensure_role(model=spec.model, config=config, budget_gb=budget_gb)
     return resolved.endpoint.rstrip("/") + "/v1"
 
@@ -648,12 +651,14 @@ def build_app(config: Any = None):
 
 
 def _list_models(config: Any) -> dict:
-    """OpenAI /v1/models payload: registry roles as ``role:<name>``."""
-    roles = _get(config, "roles", {}) or {}
-    if not roles:
-        from ..registry import registry as _registry
+    """OpenAI /v1/models payload: the effective role table as ``role:<name>`` ids.
 
-        roles = _registry.load().get("roles", {}) or {}
+    Uses the same precedence-layered table as resolution (config > registry >
+    shipped defaults) so ``/v1/models`` advertises exactly the roles a request
+    can target, including the shipped defaults on a fresh install."""
+    from ..backends.resolve import _roles
+
+    roles = _roles(config)
     data = []
     for role, spec in roles.items():
         model = _get(spec, "model")
@@ -665,8 +670,33 @@ def _list_models(config: Any) -> dict:
     return {"object": "list", "data": data}
 
 
+LOCAL_KEY_CLASS = "interactive"
+
+
+def ensure_local_key(config: Any = None) -> tuple[str, bool]:
+    """Guarantee a usable broker key exists, minting one mode-600 on first run so
+    local CLI use works out of the box. The single local user runs at the
+    ``interactive`` QoS class (higher priority, never preempted by background
+    work); the client finds this key whether it asks for interactive or falls
+    back to any registered key. Returns ``(key, created)``: ``created`` is True
+    only when a new key was just minted. Remote/LAN callers still need a key;
+    this only removes the "cannot talk to my own broker" wall for localhost.
+    """
+    keys = load_keys(config=config)
+    if keys:
+        # Any existing key means the operator already provisioned access; do not
+        # add a second one. Prefer an interactive key if present, else the first.
+        for k, v in keys.items():
+            if v.get("class") == LOCAL_KEY_CLASS:
+                return k, False
+        return next(iter(keys)), False
+    key = genkey("local", LOCAL_KEY_CLASS, config=config)
+    return key, True
+
+
 def serve(config: Any = None) -> None:
-    """Run the broker daemon. Binds loopback by default."""
+    """Run the broker daemon. Binds loopback by default, and provisions a local
+    interactive key on first run so ``cheapskate task`` works immediately."""
     import uvicorn
 
     if config is None:
@@ -676,4 +706,11 @@ def serve(config: Any = None) -> None:
     broker_cfg = _broker_cfg(config)
     host = resolve_bind_host(config)  # enforces bind_loopback / bind_lan policy
     port = int(broker_cfg.get("port") or DEFAULT_PORT)
+    key, created = ensure_local_key(config)
+    if created:
+        print(
+            f"[cheapskate] provisioned a local interactive key (saved mode-600 to "
+            f"{keys_path(config)}). Local `cheapskate task` and the client use it "
+            f"automatically; pass it as a Bearer token for remote/LAN calls."
+        )
     uvicorn.run(build_app(config), host=host, port=port, log_level="warning")

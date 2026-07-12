@@ -123,6 +123,19 @@ def _cmd_task(args: argparse.Namespace) -> int:
     except _task.LocalUnavailable as exc:
         _print({"task_type": args.task_type, "route": "refused", "class": "local_unavailable", "reason": str(exc)})
         return 2
+    # A local route that produced no output means every model attempt failed
+    # (the broker is down, or the model call errored) and escalation had nowhere
+    # to go. Surface it as an error with an actionable hint, not a silent null.
+    if not result.get("ok") and result.get("output") is None:
+        err = result.get("error_kind") or "unknown"
+        hint = (
+            "is the broker running? start it with `cheapskate serve`"
+            if err in ("CheapskateUnavailable", "ConnectError", "ConnectionError",
+                       "ConnectTimeout", "ReadTimeout")
+            else "the model call failed on every attempt"
+        )
+        _print({**result, "error": f"local task produced no output ({err}); {hint}"})
+        return 1
     _print(result)
     return 0
 

@@ -39,6 +39,32 @@ def test_task_cloud_route_no_provider_refuses_without_traceback(capsys):
     assert payload["reason"]  # actionable message present
 
 
+def test_task_local_failure_surfaces_error_and_nonzero_exit(capsys, monkeypatch):
+    # D3: a local route that produces no output (broker down / model errored on
+    # every attempt) must NOT print a silent null with exit 0. The CLI surfaces
+    # an actionable error, points at `cheapskate serve` for a connection error,
+    # and exits non-zero.
+    from cheapskate import cli as cli_mod
+
+    def fake_run(task_type, criteria, payload, cfg, **kw):
+        return {"task_type": task_type, "route": "local", "role": "reasoning",
+                "output": None, "ok": False, "retries": 2, "escalated": True,
+                "error_kind": "CheapskateUnavailable"}
+
+    monkeypatch.setattr(cli_mod._task, "run", fake_run)
+    code = cli.main([
+        "task", "run", "--task-type", "summarize",
+        "--criteria", "crit", "--in", "payload",
+    ])
+    assert code == 1
+    out = capsys.readouterr()
+    combined = out.out + out.err
+    assert "Traceback" not in combined
+    payload = json.loads(out.out)
+    assert "error" in payload
+    assert "cheapskate serve" in payload["error"]  # actionable hint
+
+
 def test_task_never_local_refuses_cleanly(capsys):
     # A never_local task type refuses without a traceback and exits non-zero.
     code = cli.main([

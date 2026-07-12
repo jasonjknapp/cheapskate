@@ -145,12 +145,75 @@ def test_chat_completions_proxies_to_fake_backend(client):
     assert client._fake.seen[0]["url"].endswith("/chat/completions")
 
 
+def test_chat_completions_rewrites_role_prefix_to_concrete_model(client):
+    """D1 regression: a ``role:<name>`` model MUST be resolved to the role's
+    concrete tag before the request reaches the backend. Before the fix,
+    ``resolve()`` left ``role:reasoning`` as a literal id and the backend 404'd.
+    The downstream payload the fake backend sees must carry ``test-model``, never
+    ``role:reasoning``."""
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer sk-test"},
+        json={"model": "role:reasoning", "messages": [{"role": "user", "content": "ping"}]},
+    )
+    assert r.status_code == 200
+    sent = client._fake.seen[-1]["json"]
+    assert sent["model"] == "test-model", f"role: prefix not decoded; sent {sent['model']!r}"
+    assert not str(sent["model"]).startswith("role:")
+
+
 def test_chat_completions_auth_rejection_path(client):
     r = client.post(
         "/v1/chat/completions",
         json={"model": "role:reasoning", "messages": [{"role": "user", "content": "ping"}]},
     )
     assert r.status_code == 401
+
+
+def test_d2_prepare_backend_gate_pulls_absent_ollama_model(monkeypatch):
+    """D2: the broker's prepare_backend must route Ollama specs through
+    ensure_role (which gate-pulls an absent model), not short-circuit and let
+    the daemon 404. Assert ensure_role is called for an ollama spec."""
+    from cheapskate.backends.resolve import BackendSpec
+
+    seen = {}
+
+    def fake_ensure_role(*, model, config, budget_gb):
+        seen["model"] = model
+        return BackendSpec(model=model, backend="ollama",
+                           endpoint="http://127.0.0.1:11434", role="code")
+
+    monkeypatch.setattr(broker_app, "ensure_role", fake_ensure_role)
+    spec = BackendSpec(model="qwen3:4b", backend="ollama",
+                       endpoint="http://127.0.0.1:11434", role="code")
+    url = broker_app.prepare_backend(spec, budget_gb=64.0, config=Config())
+    assert seen["model"] == "qwen3:4b"  # ensure_role WAS called (gate-pull reachable)
+    assert url.endswith("/v1")
+
+
+def test_d7_ensure_local_key_mints_interactive_key_on_first_run():
+    """D7: a fresh install must be able to talk to its own broker. serve()
+    provisions an interactive-class key mode-600 on first run; the client then
+    finds it (client and broker share the real keys_path, resolved from the
+    XDG state dir the conftest isolates to a tmp dir). A second call is
+    idempotent (no duplicate key)."""
+    from cheapskate import client as client_mod
+    from cheapskate.broker.gates import keys_path
+
+    cfg = Config()
+    keyfile = keys_path(cfg)  # resolves under the isolated tmp state dir
+
+    key, created = broker_app.ensure_local_key(cfg)
+    assert created is True
+    data = json.loads(keyfile.read_text())
+    assert data[key]["class"] == "interactive"
+    assert (keyfile.stat().st_mode & 0o777) == 0o600  # mode-600
+    # the client finds the SAME key through the real shared keys_path
+    assert client_mod._api_key(cfg) == key
+    # idempotent: a second call does not add a key
+    key2, created2 = broker_app.ensure_local_key(cfg)
+    assert created2 is False and key2 == key
+    assert len(json.loads(keyfile.read_text())) == 1
 
 
 def test_stream_with_task_type_is_400_invalid_request(client):

@@ -62,6 +62,26 @@ def test_run_task_tool_never_local_refusal_is_structured():
     assert result["class"] == "never_local"
 
 
+def test_d6_run_task_tool_local_unavailable_refusal_is_structured(monkeypatch):
+    # D6: when task.run raises LocalUnavailable (e.g. a role with no model, or a
+    # never-cloud task that cannot run locally), the MCP tool must return a
+    # structured refusal, not let the exception surface to the client. The tool
+    # closes over `task` imported inside build_server, so patch the router module.
+    from cheapskate.router import task as task_mod
+
+    def raise_local_unavailable(*a, **k):
+        raise task_mod.LocalUnavailable("no model configured for role")
+
+    monkeypatch.setattr(task_mod, "run", raise_local_unavailable)
+    srv = mcp_server.build_server(Config())
+    _blocks, structured = asyncio.run(
+        srv.call_tool("run_task", {"task_type": "summarize", "criteria": "c", "payload": "d"})
+    )
+    result = structured.get("result", structured)
+    assert result["route"] == "refused"
+    assert result["class"] == "local_unavailable"
+
+
 def test_serve_without_mcp_extra_raises_clear_error(monkeypatch):
     # Simulate the 'mcp' package being absent: build_server must raise an
     # ImportError naming the extra.

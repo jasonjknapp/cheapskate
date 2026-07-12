@@ -148,7 +148,16 @@ def resolve(
     Precedence: an explicit ``model`` (inheriting role metadata if it matches a
     role entry) wins over ``role``. Unknown models get an inferred backend and
     the default endpoint for it.
+
+    A ``model`` of the form ``role:<name>`` is the broker's wire convention for
+    "resolve this role live" (the client sends it, and ``/v1/models`` advertises
+    it). It is decoded here to a role lookup so the whole role table (config,
+    registry, shipped defaults) applies, rather than being treated as a literal
+    model id.
     """
+    if model and model.startswith("role:"):
+        return resolve(role=model[len("role:"):], config=config, default_model=default_model)
+
     roles = _roles(config)
 
     if role and not model:
