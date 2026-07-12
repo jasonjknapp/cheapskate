@@ -123,6 +123,20 @@ def _cmd_task(args: argparse.Namespace) -> int:
     except _task.LocalUnavailable as exc:
         _print({"task_type": args.task_type, "route": "refused", "class": "local_unavailable", "reason": str(exc)})
         return 2
+    # No output means the model produced nothing usable, whether the run failed
+    # (broker down / model errored on every attempt) or "succeeded" on an empty
+    # answer. Either way it is not a result the user can use: surface it as an
+    # error with an actionable hint and a non-zero exit, never a silent null.
+    if result.get("output") is None:
+        err = result.get("error_kind") or "empty_output"
+        hint = (
+            "is the broker running? start it with `cheapskate serve`"
+            if err in ("CheapskateUnavailable", "ConnectError", "ConnectionError",
+                       "ConnectTimeout", "ReadTimeout")
+            else "the model returned no usable output"
+        )
+        _print({**result, "error": f"local task produced no output ({err}); {hint}"})
+        return 1
     _print(result)
     return 0
 

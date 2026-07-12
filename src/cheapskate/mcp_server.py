@@ -76,6 +76,9 @@ def build_server(config: Any = None) -> Any:
         except _task.CloudUnavailable as exc:
             return {"task_type": task_type, "route": "refused",
                     "class": "cloud_unavailable", "reason": str(exc)}
+        except _task.LocalUnavailable as exc:
+            return {"task_type": task_type, "route": "refused",
+                    "class": "local_unavailable", "reason": str(exc)}
 
     @server.tool(
         name="econ_report",

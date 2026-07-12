@@ -3,8 +3,12 @@
 
 The preflight is the one entry point a consumer calls to be sure the correct
 backend is serving the correct model. For MLX it drives the single-large-model
-lifecycle (de-load co-residents, flock, spawn); for Ollama it validates
-residency only (the daemon auto-loads on request) and NEVER pulls.
+lifecycle (de-load co-residents, flock, spawn); for Ollama the daemon auto-loads
+a PRESENT model on request, so the preflight guarantees presence: an absent
+Ollama model is fetched on demand via ``ollama pull``, gated by the same
+fail-closed disk/size/RAM budget as model currency (and skippable with
+``machine.auto_pull: false``). MLX fetch-on-demand is not built yet; an absent
+MLX model raises with the acquisition path named.
 
 ``evict_coresidents`` is the cross-runtime memory-safety primitive: before a
 large MLX load it de-loads models resident in OTHER runtimes so the combined
@@ -157,9 +161,13 @@ def ensure_role(
             approx_gb=spec.approx_gb, role=spec.role, quant=spec.quant,
         )
     if spec.backend == "ollama":
-        # Fast path: already resident (loaded) OR already pulled (Ollama's daemon
-        # auto-loads a pulled model on request), so nothing to fetch.
-        if ollama.ollama_model_resident(spec.model) or model_present(spec.model):
+        # Hot path: one probe. A PULLED model is all we need (the Ollama daemon
+        # auto-loads it on request), so residency (is-it-in-VRAM) is irrelevant to
+        # whether it will serve. We deliberately do NOT also probe `ollama ps`
+        # here (that was a second per-request subprocess for no benefit). If
+        # auto_pull is off, an absent model is a hard, actionable error and we
+        # never even reach the pull path.
+        if model_present(spec.model):
             return spec
         if not _auto_pull_enabled(config):
             raise LocalUnavailable(

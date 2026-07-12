@@ -202,6 +202,24 @@ def _default_users() -> dict[str, UserProfile]:
 # ── top-level model ──────────────────────────────────────────────────────────
 
 
+class RoleEntry(BaseModel):
+    """A user override of which local model serves a router role, set in
+    ``config.yaml`` under ``roles:``. This is the highest-precedence role source
+    (it wins over a promoted registry entry and over the shipped default for that
+    role, per :func:`cheapskate.backends.resolve._roles`). ``model`` is required;
+    ``backend`` is inferred from the model id when omitted; ``approx_gb`` feeds
+    the RAM-fit check. ``fallback`` / ``rollback`` / ``quarantine`` mirror the
+    registry entry shape so a config role resolves through the exact same path a
+    promoted one does."""
+
+    model: str
+    backend: str | None = None
+    approx_gb: float | None = None
+    fallback: str | None = None
+    rollback: list[str] = Field(default_factory=list)
+    quarantine: list[str] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     """The whole configuration surface. Access typed sections, not raw dicts."""
 
@@ -211,6 +229,10 @@ class Config(BaseModel):
     machine: MachineConfig = Field(default_factory=MachineConfig)
     backends: dict[str, BackendEntry] = Field(default_factory=_default_backends)
     task_types: dict[str, TaskTypeRoute] = Field(default_factory=_default_task_types)
+    # User role overrides (config.yaml `roles:`). Empty by default; a role set
+    # here wins over the registry and the shipped defaults for that role. This is
+    # the primary "point a role at my model" knob the quickstart documents.
+    roles: dict[str, RoleEntry] = Field(default_factory=dict)
     # Fail-closed classes. never_local: must never leave to a local model (no
     # silent cloud fallback either, a NeverLocal refusal). never_cloud: must
     # never leave the machine (hard error if routed cloud). Symmetric guards.
