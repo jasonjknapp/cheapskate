@@ -125,7 +125,7 @@ def staleness_warning(
 def lookup(snapshot: PricingSnapshot, model_id: str) -> PriceRow | None:
     """Look up a model's price. Exact id first; then a fuzzy fallback that
     prefix-matches in EITHER direction (query is a prefix of a row id, or a row
-    id is a prefix of the query — e.g. a dated variant ``gpt-4o-2026-05-01``).
+    id is a prefix of the query — e.g. a dated variant ``gpt-5.4-mini-2026-05-01``).
     A fuzzy hit is flagged ``fuzzy=True`` and carries ``matched_id`` so callers
     can surface "matched X to Y (fuzzy)". Ambiguous prefix ⇒ the longest (most
     specific) matched row id wins deterministically. No match ⇒ None."""

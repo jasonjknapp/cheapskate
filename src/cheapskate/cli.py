@@ -330,7 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("econ", help="per-task-type routing recommendation table")
     e.add_argument("--month", default=None, help="restrict to a month (YYYY-MM)")
     e.add_argument(
-        "--cloud-ref", dest="cloud_ref", default="gpt-4o-mini",
+        "--cloud-ref", dest="cloud_ref", default="gpt-5.4-mini",
         help="cloud model to price the cloud-equivalent against",
     )
 
@@ -341,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("--month", default=None, help="restrict to a month (YYYY-MM)")
     r.add_argument(
-        "--cloud-ref", dest="cloud_ref", default="gpt-4o-mini",
+        "--cloud-ref", dest="cloud_ref", default="gpt-5.4-mini",
         help="cloud model to price the cloud-equivalent against",
     )
     return ap

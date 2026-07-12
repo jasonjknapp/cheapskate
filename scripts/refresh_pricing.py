@@ -38,7 +38,7 @@ def _fetch(url: str) -> dict:
 
 def _norm(model_id: str) -> str:
     """Normalize a model id for matching: lowercase, drop a provider prefix
-    (``openai/gpt-4o`` → ``gpt-4o``), strip dashes/dots for a loose compare."""
+    (``openai/gpt-5.4-mini`` → ``gpt-5.4-mini``), strip dashes/dots to loose-compare."""
     base = model_id.lower().split("/")[-1]
     return base.replace(".", "").replace("-", "")
 

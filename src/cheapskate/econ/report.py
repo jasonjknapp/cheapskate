@@ -220,7 +220,7 @@ def build_task_reports(
     snapshot: pricing.PricingSnapshot,
     power: PowerReading,
     *,
-    cloud_ref_model: str = "gpt-4o-mini",
+    cloud_ref_model: str = "gpt-5.4-mini",
     tasks_in_month: int | None = None,
 ) -> list[TaskTypeReport]:
     """Cost each task type. ``cloud_ref_model`` is the yardstick a local run is
@@ -509,7 +509,7 @@ def generate(
     *,
     month: str | None = None,
     path: Path | None = None,
-    cloud_ref_model: str = "gpt-4o-mini",
+    cloud_ref_model: str = "gpt-5.4-mini",
     today: date | None = None,
 ) -> ReportBundle:
     """Read telemetry → stats → costed reports → receipts. No network; power is

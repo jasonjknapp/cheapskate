@@ -22,7 +22,13 @@ def _cfg(budget):
 
 
 def _snapshot():
-    return pricing.load_pricing()
+    # A FIXED snapshot decoupled from the shipped catalog: the default cloud
+    # reference (gpt-5.4-mini) is pinned here at $0.15 in / $0.60 out so the
+    # arithmetic in each test stays valid regardless of real-world price drift.
+    rows = {
+        "gpt-5.4-mini": pricing.PriceRow("gpt-5.4-mini", 0.15, 0.6, "test-fixed", "2026-07-11"),
+    }
+    return pricing.PricingSnapshot(rows=rows, origin="bundled", path=pricing._BUNDLED)
 
 
 def _cloud_event(tokens_in, tokens_out, *, ts="2026-07-05T00:00:00+00:00", user="interactive"):

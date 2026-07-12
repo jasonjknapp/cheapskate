@@ -72,7 +72,7 @@ def month_to_date_cloud_spend(
     *,
     user: str,
     month: str,
-    cloud_ref_model: str = "gpt-4o-mini",
+    cloud_ref_model: str = "gpt-5.4-mini",
 ) -> float:
     """Sum the USD a user sent to the cloud this month. A generation event counts
     as cloud spend when it was cloud-routed OR escalated off a local attempt.
@@ -170,7 +170,7 @@ def govern_user(
     events: Iterable[dict[str, Any]] | None = None,
     snapshot: pricing.PricingSnapshot | None = None,
     month: str | None = None,
-    cloud_ref_model: str = "gpt-4o-mini",
+    cloud_ref_model: str = "gpt-5.4-mini",
     state_path: Path | None = None,
     log_event: Callable[..., None] | None = None,
     telemetry_path: Path | None = None,

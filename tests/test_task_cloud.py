@@ -162,7 +162,8 @@ def test_governor_at_95_percent_forces_local(events, tmp_path):
         providers=_cloud_cfg().providers,
         users={"interactive": UserProfile(quota=UserQuota(monthly_budget_usd=1.0))},
     )
-    # 6M in + 1M out at gpt-4o-mini reference = $1.50 → 150% ≥ 95% → force local
+    # 6M in + 1M out at the default gpt-5.4-mini reference far exceeds the $1 cap
+    # → well above 95% → force local (the exact multiple is not asserted)
     from cheapskate.econ import pricing
 
     spend_events = [{

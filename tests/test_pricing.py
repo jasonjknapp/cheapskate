@@ -26,23 +26,23 @@ def test_bundled_snapshot_loads_and_is_nonempty():
 
 def test_seed_has_expected_reference_models():
     snap = pricing.load_pricing()
-    # a couple of stable, popular anchors the report defaults to
-    assert "gpt-4o-mini" in snap.rows
-    assert "gpt-4o" in snap.rows
+    # a couple of stable anchors the report defaults to (current-generation ids)
+    assert "gpt-5.4-mini" in snap.rows
+    assert "claude-sonnet-4-6" in snap.rows
 
 
 def test_exact_lookup_is_not_fuzzy():
     snap = pricing.load_pricing()
-    row = pricing.lookup(snap, "gpt-4o-mini")
+    row = pricing.lookup(snap, "gpt-5.4-mini")
     assert row is not None
     assert row.fuzzy is False
-    assert row.id == "gpt-4o-mini"
+    assert row.id == "gpt-5.4-mini"
 
 
 def test_fuzzy_prefix_match_is_flagged():
     snap = pricing.load_pricing()
-    # a dated variant that is not an exact id → fuzzy prefix match to gpt-4o
-    row = pricing.lookup(snap, "gpt-4o-2026-05-01")
+    # a dated variant that is not an exact id → fuzzy prefix match to a seed id
+    row = pricing.lookup(snap, "gpt-5.4-mini-2026-05-01")
     assert row is not None
     assert row.fuzzy is True
     assert row.matched_id is not None
