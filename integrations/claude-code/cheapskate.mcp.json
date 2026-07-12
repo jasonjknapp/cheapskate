@@ -1,0 +1,13 @@
+{
+  "//": "Drop-in MCP server config for Claude Code. Two ways to install:",
+  "//install-a": "Copy the 'cheapskate' entry below into the mcpServers object of your project .mcp.json (create the file at the repo root if it does not exist).",
+  "//install-b": "Or run: claude mcp add cheapskate -- cheapskate mcp",
+  "//requires": "The mcp extra: pip install 'cheapskate[mcp]'  (so 'cheapskate mcp' can start the stdio server).",
+  "mcpServers": {
+    "cheapskate": {
+      "command": "cheapskate",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}

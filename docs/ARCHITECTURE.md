@@ -18,10 +18,14 @@ src/cheapskate/
 │   ├── gates.py      PriorityGate + ModelAwareGate (admission: a running generation is NEVER preempted)
 │   └── capacity.py   capacity_decision(), memory_snapshot() (RAM budget vs resident models)
 ├── backends/
-│   ├── resolve.py    role/model → backend spec (ollama | mlx | lmstudio | remote | cloud)
+│   ├── resolve.py    role/model → backend spec (ollama | mlx | lmstudio | remote | cloud);
+│   │                 layers config.roles > registry > shipped suggested default_roles()
 │   ├── mlx.py        ensure/stop MLX server; SINGLE-LARGE-MODEL lock (machine-wide flock)
-│   ├── ollama.py     residency probes, stop/evict helpers
-│   └── preflight.py  role preflight: de-load co-residents before a large load; release
+│   ├── ollama.py     residency/presence probes, stop/evict helpers, gated ollama_pull
+│   └── preflight.py  role preflight: de-load co-residents before a large load; release.
+│                     Ollama ensure-present-or-pull: an absent selected model is fetched on
+│                     demand (machine.auto_pull, default on) BEHIND the same fail-closed
+│                     disk/size/RAM gate (currency.candidate_fits). MLX is not auto-fetched yet.
 ├── router/
 │   ├── dial.py       the spend dial: 0 cloud-first · 1 balanced · 2 local-first · 3 local-only
 │   │                 (+ intensity sub-dial on 2: lite|std|max); read from state file, never cached
@@ -49,6 +53,10 @@ dispatch); otherwise it is a direct role/model proxy. `router/task.py` executes 
 cloud routes (fail-closed both directions), consults the budget governor before a cloud dispatch,
 and emits a `kind="generation"` event per attempt (the econ report/governor cost only that kind;
 `kind="task.run"` is a per-run summary, not re-counted).
+
+Copy-pasteable agent-offload kits (Claude Code, Gemini CLI, Codex, and any OpenAI-compatible tool)
+live in `integrations/`: MCP registrations for `cheapskate mcp` plus paste-in offload guidance, all
+built against these same two adoption surfaces.
 
 Shipped alongside the core: the deterministic eval harness (`cheapskate eval`), full `doctor`
 preflight checks, and CI.

@@ -1,0 +1,16 @@
+{
+  "//": "Drop-in MCP server config for Gemini CLI. Merge the 'cheapskate' entry below into the",
+  "//_2": "mcpServers object of your settings.json (~/.gemini/settings.json for all projects, or",
+  "//_3": ".gemini/settings.json in a project). If settings.json has no mcpServers key yet, add it.",
+  "//requires": "The mcp extra: pip install 'cheapskate[mcp]'  (so 'cheapskate mcp' can start the stdio server).",
+  "//fields": "command/args/cwd/env/timeout/trust are the documented Gemini CLI stdio fields; env supports $VAR expansion. 'trust: false' keeps tool-call confirmations on (recommended).",
+  "mcpServers": {
+    "cheapskate": {
+      "command": "cheapskate",
+      "args": ["mcp"],
+      "env": {},
+      "timeout": 600000,
+      "trust": false
+    }
+  }
+}

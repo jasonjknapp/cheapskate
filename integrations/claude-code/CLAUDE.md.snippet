@@ -1,0 +1,70 @@
+<!--
+  Paste this block into your CLAUDE.md (project or ~/.claude/CLAUDE.md). It tells Claude Code
+  WHEN and HOW to offload cheap/bulk work to cheapskate via the run_task MCP tool, so you spend
+  premium tokens only on judgement. Requires the cheapskate MCP server registered (see
+  cheapskate.mcp.json in this folder).
+-->
+
+## Token-saving offload to cheapskate
+
+You have a cheapskate MCP server registered. It exposes two tools:
+
+- `run_task(task_type, criteria, payload)`: routes ONE subtask to the cheapest model that clears
+  the acceptance criteria (local first, cloud only on escalation), verifies and repairs the output,
+  and returns a result with `route` (local|cloud|refused), `ok`, `retries`, `escalated`, and
+  `output`.
+- `econ_report(month?)`: the monthly savings receipt (routed %, quality, true cost).
+
+**Offload the bulk work. Keep your tokens for judgement.** For high-volume, low-judgement
+subtasks, call `run_task` with explicit acceptance criteria instead of doing them yourself:
+
+- drafting (commit messages, docstrings, changelog entries, boilerplate prose)
+- classification and labeling
+- extraction (pull fields/values out of a blob into a shape)
+- summarization of long files or logs
+- first-pass code review (you then sanity-check the findings)
+- boilerplate code (repetitive scaffolding, test stubs)
+
+Reserve your own reasoning for architecture, planning, final review, and synthesis. Delegate the
+volume; own the decisions.
+
+**Always verify.** Treat a `run_task` result as a draft. Check `output` against the same `criteria`
+you sent before you use it. If `ok` is false or `route` is `refused`, do not use the output. If it
+came back `escalated` a lot, consider doing that task yourself.
+
+**Never offload these.** The `financial`, `legal`, `medical`, and `credentials` task types are
+`never_local` and cheapskate will refuse them. Do not route anything with real money, legal, or
+medical stakes, or any secret/credential handling, through `run_task` to save tokens. Do that work
+yourself on the premium tier.
+
+### Examples
+
+Draft the commit message for a staged diff:
+
+```
+run_task(
+  task_type="draft",
+  criteria="One-line imperative subject under 72 chars, then a blank line, then 2-4 bullet points of what changed and why. No hype, no emojis.",
+  payload="<the git diff --staged output>"
+)
+```
+
+Classify a batch of log lines by severity:
+
+```
+run_task(
+  task_type="classify",
+  criteria="Return one label per input line, one of: error | warning | info. Output only 'N: <label>' per line, nothing else.",
+  payload="<the log lines, numbered>"
+)
+```
+
+First-pass review of a function (you verify the findings after):
+
+```
+run_task(
+  task_type="review",
+  criteria="List concrete correctness bugs and missing edge cases as a short bulleted list. No style nits. If nothing is wrong, say 'no correctness issues found'.",
+  payload="<the function source>"
+)
+```

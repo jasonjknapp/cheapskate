@@ -1,0 +1,13 @@
+# Drop-in MCP server config for OpenAI Codex CLI.
+# Append this table to your ~/.codex/config.toml (or .codex/config.toml in a project).
+# Equivalent CLI form: codex mcp add cheapskate -- cheapskate mcp
+#
+# Requires the mcp extra so 'cheapskate mcp' can start the stdio server:
+#   pip install 'cheapskate[mcp]'
+
+[mcp_servers.cheapskate]
+command = "cheapskate"
+args = ["mcp"]
+# env = { }                    # optional environment for the server process
+# startup_timeout_sec = 10     # optional; time to wait for the server to start (default 10)
+# tool_timeout_sec = 60        # optional; per-tool-call timeout (default 60); raise for long tasks
