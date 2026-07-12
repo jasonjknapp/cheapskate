@@ -450,6 +450,11 @@ def build_app(config: Any = None):
         except Exception:  # noqa: BLE001
             return JSONResponse({"error": "body must be JSON"}, status_code=400)
         task_type = request.headers.get("x-task-type")
+        # An internal call is one cheapskate's own router made (via client.py); the
+        # router already emits the costable ``generation`` event, so the broker must
+        # NOT emit a second one for these (that double-counts econ). External
+        # OpenAI-compat traffic has no such header, so the broker IS its only meter.
+        internal = bool(request.headers.get("x-cheapskate-internal"))
         try:
             spec = resolve(model=payload.get("model"), config=config)
         except Exception as e:  # noqa: BLE001
@@ -495,23 +500,39 @@ def build_app(config: Any = None):
                 _log("gate_release_failed", model=spec.model, user=user, error=str(e))
 
         start = time.monotonic()
-        route = f"{spec.backend}:{spec.role or spec.model}"
+        route = f"{spec.backend}:{spec.role or spec.model}"  # ops label
         handed_off = False  # True only once a StreamingResponse OWNS the release
+
+        def _emit_serve(ok: bool, *, status_code: int | None = None, error: str | None = None):
+            """Every served request logs one ops record (kind ``broker.serve``:
+            latency/queue/status; the econ report ignores it). For genuinely
+            external OpenAI-compat CHAT traffic (no X-Cheapskate-Internal) the
+            broker is the only meter, so it ALSO logs one cost-shaped
+            ``generation`` event with a clean ``route="local"`` and the request's
+            task_type. Internal router calls skip the cost event (the router
+            already emitted it); embeddings are not econ tasks, so they get only
+            the ops record. ``duration_s`` (not ``latency_s``) is the field the
+            econ report reads, so the cost event carries it."""
+            duration_s = round(time.monotonic() - start, 3)
+            queued_ms = round(queued * 1000)
+            _log("broker.serve", model=spec.model, route=route, user=user,
+                 task_type=task_type, latency_s=duration_s, queued_ms=queued_ms,
+                 ok=ok, status_code=status_code, error=error)
+            if not internal and not embed:
+                _log("generation", model=spec.model, route="local", user=user,
+                     task_type=task_type, duration_s=duration_s, ok=ok,
+                     retries=0, escalated=False, error=error)
         try:
             try:
                 await asyncio.to_thread(enforce_capacity, spec, budget_gb)
                 base = await asyncio.to_thread(prepare_backend, spec, budget_gb, config)
             except RuntimeError as e:
                 if str(e).startswith("503:"):
-                    _log("generation", model=spec.model, route=route, user=user,
-                         task_type=task_type, queued_ms=round(queued * 1000),
-                         ok=False, error=str(e), status_code=503)
+                    _emit_serve(False, status_code=503, error=str(e))
                     return JSONResponse({"error": str(e)[5:].strip()}, status_code=503)
                 raise
             except LocalUnavailable as e:
-                _log("generation", model=spec.model, route=route, user=user,
-                     task_type=task_type, queued_ms=round(queued * 1000),
-                     ok=False, error=str(e), status_code=503)
+                _emit_serve(False, status_code=503, error=str(e))
                 return JSONResponse({"error": str(e)}, status_code=503)
 
             payload["model"] = spec.model
@@ -529,9 +550,7 @@ def build_app(config: Any = None):
                         ok = False
                         raise
                     finally:
-                        _log("generation", model=spec.model, route=route, user=user,
-                             task_type=task_type, latency_s=round(time.monotonic() - start, 3),
-                             queued_ms=round(queued * 1000), ok=ok)
+                        _emit_serve(ok)
                         await _release()
 
                 resp = SafeStreamingResponse(
@@ -542,19 +561,14 @@ def build_app(config: Any = None):
                 return resp
 
             r = await app.state.client.post(url, json=payload)
-            _log("generation", model=spec.model, route=route, user=user,
-                 task_type=task_type, latency_s=round(time.monotonic() - start, 3),
-                 queued_ms=round(queued * 1000), ok=r.status_code < 400,
-                 status_code=r.status_code)
+            _emit_serve(r.status_code < 400, status_code=r.status_code)
             return Response(
                 content=r.content, status_code=r.status_code,
                 media_type=r.headers.get("content-type", "application/json"),
             )
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"
-            _log("generation", model=spec.model, route=route, user=user,
-                 task_type=task_type, latency_s=round(time.monotonic() - start, 3),
-                 queued_ms=round(queued * 1000), ok=False, error=err, status_code=502)
+            _emit_serve(False, status_code=502, error=err)
             return JSONResponse({"error": err}, status_code=502)
         finally:
             # Every path that did NOT hand the release to a streaming generator

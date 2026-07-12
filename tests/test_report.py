@@ -93,6 +93,22 @@ def test_non_generation_events_ignored():
     assert stats == {}
 
 
+def test_broker_serve_ops_events_not_costed():
+    # D8: the broker's per-request ops record is kind="broker.serve", not
+    # "generation", so the econ report ignores it entirely. Only the router's
+    # (or a direct-/v1) generation event is costed. This is the fix for the
+    # double-count that reported "8 runs, 50% local" for 4 local tasks.
+    events = [
+        _gen(kind="generation", route="local"),
+        {"kind": "broker.serve", "route": "ollama:reasoning", "task_type": None,
+         "ok": True, "ts": "2026-07-05T10:00:00.000+00:00"},
+    ]
+    stats = report.collect_stats(events)
+    assert set(stats) == {"summarize"}   # no bogus "unknown" bucket from the ops event
+    assert stats["summarize"].runs == 1  # counted once
+    assert stats["summarize"].local_runs == 1
+
+
 def test_malformed_line_skipped(tmp_path):
     p = tmp_path / "telemetry.jsonl"
     p.write_text('{"kind":"generation","task_type":"x","ts":"2026-07-01T00:00:00+00:00","runs":1}\nNOT JSON\n')

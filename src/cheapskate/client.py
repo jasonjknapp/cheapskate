@@ -107,7 +107,15 @@ def _post_chat(
     if response_json:
         payload["response_format"] = {"type": "json_object"}
     url = f"{_broker_base(config)}/v1/chat/completions"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    # X-Cheapskate-Internal marks a call that originated from cheapskate's own
+    # router (which already emits the costable generation telemetry). The broker
+    # uses it to avoid double-counting: it records only an ops event for these,
+    # and reserves its own cost event for genuinely external OpenAI-compat traffic.
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key}",
+        "X-Cheapskate-Internal": "1",
+    }
 
     client = api or httpx.Client(timeout=timeout)
     close = api is None
