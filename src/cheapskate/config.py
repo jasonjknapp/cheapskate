@@ -2,7 +2,7 @@
 """Config loader: shipped defaults (as data) deep-merged under a user's
 ``config_dir()/config.yaml``.
 
-Nothing secret lives here — secrets come from environment variables only. The
+Nothing secret lives here, secrets come from environment variables only. The
 model is a pydantic ``Config`` so downstream modules read typed, validated
 sections instead of poking at raw dicts.
 """
@@ -45,14 +45,14 @@ class DialConfig(BaseModel):
 
 
 def _default_machine_id() -> str:
-    """Sanitized short hostname — lowercase, alnum/dash only, no domain."""
+    """Sanitized short hostname, lowercase, alnum/dash only, no domain."""
     host = (socket.gethostname() or "machine").split(".")[0].strip().lower()
     cleaned = "".join(c if (c.isalnum() or c == "-") else "-" for c in host).strip("-")
     return cleaned or "machine"
 
 
 def _detected_ram_gb() -> float | None:
-    """Best-effort total RAM in GB (None if undeterminable — callers fail closed)."""
+    """Best-effort total RAM in GB (None if undeterminable, callers fail closed)."""
     try:
         pages = __import__("os").sysconf("SC_PHYS_PAGES")
         page_size = __import__("os").sysconf("SC_PAGE_SIZE")
@@ -64,7 +64,7 @@ def _detected_ram_gb() -> float | None:
 class MachineConfig(BaseModel):
     """Identity + RAM budget for this host. ``machine_id`` stamps every telemetry
     event. ``ram_gb`` is detected total RAM (None if undeterminable);
-    ``ram_budget_gb`` is an explicit override of the load budget — when unset,
+    ``ram_budget_gb`` is an explicit override of the load budget, when unset,
     the budget is ``ram_gb - ram_headroom_gb``, and unknown RAM fails closed."""
 
     machine_id: str = Field(default_factory=_default_machine_id)
@@ -72,6 +72,11 @@ class MachineConfig(BaseModel):
     ram_budget_gb: float | None = None
     ram_headroom_gb: float = 24.0
     disk_headroom_gb: float = 15.0
+    # Fetch a selected Ollama model on first use when it is not yet pulled,
+    # GATED by the same fail-closed disk/size/RAM budget as model currency. True
+    # by default (a fresh install just works); set False on a metered connection
+    # to require a manual ``ollama pull`` instead.
+    auto_pull: bool = True
 
 
 class BackendEntry(BaseModel):
@@ -111,7 +116,7 @@ class UserQuota(BaseModel):
 
 class UserProfile(BaseModel):
     """A named key-holder. ``key_class`` sets broker priority: interactive >
-    background. The literal API key is never stored here — it lives in the
+    background. The literal API key is never stored here, it lives in the
     broker keys file (mode 600), referenced by env/secret out of band."""
 
     key_class: str = "interactive"  # interactive | background
@@ -119,7 +124,7 @@ class UserProfile(BaseModel):
 
 
 class ProviderConfig(BaseModel):
-    """A cloud model provider — a thin adapter target, OFF by default.
+    """A cloud model provider, a thin adapter target, OFF by default.
 
     ``kind`` selects the adapter: ``openai-compat`` drives any OpenAI-compatible
     HTTP API (OpenAI, OpenRouter, a Gemini OpenAI-compat endpoint, …) via
@@ -127,7 +132,7 @@ class ProviderConfig(BaseModel):
 
     ``model_map`` maps a router *role* (e.g. ``reasoning``, ``code``) to that
     provider's concrete model id. ``api_key_env`` names the environment variable
-    the secret is read from — the key itself NEVER lives in config.yaml or the
+    the secret is read from, the key itself NEVER lives in config.yaml or the
     repo (Hard rule 3). ``enabled`` is False by default so a shipped install
     reaches the cloud only after a deliberate opt-in."""
 
@@ -135,7 +140,7 @@ class ProviderConfig(BaseModel):
     base_url: str | None = None  # required for openai-compat; optional override for anthropic
     model_map: dict[str, str] = Field(default_factory=dict)  # role -> concrete model id
     api_key_env: str | None = None  # name of the env var holding the secret
-    enabled: bool = False  # OFF by default — a shipped install never reaches cloud unbidden
+    enabled: bool = False  # OFF by default, a shipped install never reaches cloud unbidden
 
 
 class EconConfig(BaseModel):
@@ -170,7 +175,7 @@ def _default_backends() -> dict[str, BackendEntry]:
         "mlx": BackendEntry(kind="mlx", url="http://127.0.0.1:8080"),
         "lmstudio": BackendEntry(kind="lmstudio", url="http://127.0.0.1:1234", enabled=False),
         # A remote entry with a non-localhost URL is the multi-machine story in
-        # v0.1 — disabled by default; fill in a real host to fan out.
+        # v0.1, disabled by default; fill in a real host to fan out.
         "remote": BackendEntry(kind="remote", url=None, enabled=False),
         "cloud": BackendEntry(kind="cloud", url=None, enabled=False),
     }
@@ -207,14 +212,14 @@ class Config(BaseModel):
     backends: dict[str, BackendEntry] = Field(default_factory=_default_backends)
     task_types: dict[str, TaskTypeRoute] = Field(default_factory=_default_task_types)
     # Fail-closed classes. never_local: must never leave to a local model (no
-    # silent cloud fallback either — a NeverLocal refusal). never_cloud: must
+    # silent cloud fallback either, a NeverLocal refusal). never_cloud: must
     # never leave the machine (hard error if routed cloud). Symmetric guards.
     never_local: list[str] = Field(
         default_factory=lambda: ["financial", "legal", "medical", "credentials"]
     )
     never_cloud: list[str] = Field(default_factory=list)
     users: dict[str, UserProfile] = Field(default_factory=_default_users)
-    # Cloud providers — every entry OFF by default (BYO keys via env). A shipped
+    # Cloud providers, every entry OFF by default (BYO keys via env). A shipped
     # install reaches the cloud only after an operator enables a provider AND
     # sets its api_key_env in the environment.
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)

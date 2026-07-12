@@ -53,3 +53,15 @@ def test_task_never_local_refuses_cleanly(capsys):
     payload = json.loads(out.out)
     assert payload["route"] == "refused"
     assert payload["class"] == "never_local"
+
+
+def test_models_list_shows_defaults_with_source_marker(capsys):
+    # Fresh state: empty registry, no config.roles → the suggested defaults show
+    # up, each marked "source": "default" so they read as suggestions.
+    code = cli.main(["models", "list"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    roles = payload["roles"]
+    assert "code" in roles and roles["code"]["model"] == "qwen3-coder:30b"
+    assert roles["code"]["source"] == "default"
+    assert all(rc["source"] == "default" for rc in roles.values())

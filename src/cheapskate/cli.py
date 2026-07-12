@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Cheapskate command line: dial · models · task · serve · doctor · econ · report.
 
-Thin by design — every subcommand is a few lines that shell out to the module
+Thin by design, every subcommand is a few lines that shell out to the module
 that owns the logic. The CLI parses args and prints; it decides nothing.
 """
 
@@ -62,15 +62,26 @@ _LEVEL_MEANINGS = {
 
 
 def _cmd_models(args: argparse.Namespace) -> int:
+    # Import specific names: ``backends.__init__`` re-exports the ``resolve``
+    # FUNCTION under the ``resolve`` name, which shadows the submodule attribute.
+    from .backends.resolve import _get, _roles, role_sources
+
+    cfg = _config.load()
     reg = _registry.load()
-    roles = reg.get("roles", {})
+    # The EFFECTIVE, precedence-layered table: config > registry > shipped
+    # defaults (so a fresh install shows suggested roles instead of blank). The
+    # ``source`` marker tells the reader which entries are real vs suggested.
+    roles = _roles(cfg)
+    sources = role_sources(cfg)
     out = {
         role: {
-            "model": rc.get("model"),
-            "backend": rc.get("backend"),
-            "fallback": rc.get("fallback"),
-            "rollback": rc.get("rollback", []),
-            "quarantine": rc.get("quarantine", []),
+            "model": _get(rc, "model"),
+            "backend": _get(rc, "backend"),
+            "approx_gb": _get(rc, "approx_gb"),
+            "fallback": _get(rc, "fallback"),
+            "rollback": _get(rc, "rollback", []),
+            "quarantine": _get(rc, "quarantine", []),
+            "source": sources.get(role, "default"),
         }
         for role, rc in roles.items()
     }
@@ -123,7 +134,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     cfg = _config.load()
     try:
         from .broker import app as broker_app
-    except Exception as exc:  # noqa: BLE001 — broker deps optional at v0.1
+    except Exception as exc:  # noqa: BLE001, broker deps optional at v0.1
         _print({"error": f"broker app unavailable: {type(exc).__name__}: {exc}"})
         return 1
     serve = getattr(broker_app, "serve", None)
@@ -160,8 +171,8 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 def _cmd_eval(args: argparse.Namespace) -> int:
     """Run the shipped deterministic eval set for a role (or the whole set).
 
-    Injected mode (default) runs a canned offline ``complete`` — no model, no
-    network — so a stranger can prove the harness scores green from a bare clone
+    Injected mode (default) runs a canned offline ``complete``, no model, no
+    network, so a stranger can prove the harness scores green from a bare clone
     and CI can gate on it. ``--live`` binds the real broker client so the same
     set gates an actual model. The exit code is the gate: 0 iff every CRITICAL
     task passed.
@@ -210,7 +221,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     fail on a bare machine); telemetry writable; pricing feed age.
 
     Prints a PASS/WARN/FAIL table (or ``--json`` for the raw checks). Exits 0
-    unless something genuinely broke — a missing serving engine is a WARN, so a
+    unless something genuinely broke, a missing serving engine is a WARN, so a
     fresh clone with nothing running still exits 0."""
     from . import doctor as _doctor
 
@@ -245,7 +256,7 @@ def _cmd_econ(args: argparse.Namespace) -> int:
         print(
             "No telemetry yet for "
             + (args.month or "this month")
-            + " — run some tasks, then `cheapskate econ`."
+            + ", run some tasks, then `cheapskate econ`."
         )
         return 0
     text = _report.render_report(
@@ -282,7 +293,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
         print(
             "No telemetry yet for "
             + (args.month or "this month")
-            + " — nothing to report."
+            + ", nothing to report."
         )
         return 0
     print(

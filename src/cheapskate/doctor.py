@@ -3,7 +3,7 @@
 
 The contract is: it NEVER crashes on a stranger's machine and it NEVER fails just
 because a serving engine is absent. Missing engines, unreachable endpoints, and a
-stale pricing feed are WARNINGs, not errors — a fresh clone with nothing running
+stale pricing feed are WARNINGs, not errors, a fresh clone with nothing running
 should still exit 0 with a clear PASS/WARN table. Only a genuinely broken
 install (config won't parse, a required dir isn't writable) is a hard FAIL.
 
@@ -39,7 +39,7 @@ class Check:
 
 
 def run_doctor() -> tuple[list[Check], int]:
-    """Run every check. Returns ``(checks, exit_code)`` — exit 0 unless a FAIL."""
+    """Run every check. Returns ``(checks, exit_code)``, exit 0 unless a FAIL."""
     checks: list[Check] = []
 
     cfg, cfg_check = _check_config()
@@ -48,6 +48,7 @@ def run_doctor() -> tuple[list[Check], int]:
     checks.extend(_check_paths())
     checks.append(_check_telemetry())
     checks.append(_check_registry())
+    checks.extend(_check_default_models(cfg))
     checks.extend(_check_engines(cfg))
     checks.append(_check_pricing(cfg))
 
@@ -132,7 +133,7 @@ def _check_telemetry() -> Check:
         telemetry.log_event("doctor", ok=True)
         return Check("telemetry", PASS, "content-free JSONL writer is functional")
     except AssertionError as exc:
-        # A content-bearing field would trip the writer's assertion — that would be
+        # A content-bearing field would trip the writer's assertion, that would be
         # a genuine bug, but doctor should report it, not crash.
         return Check("telemetry", FAIL, f"content-free invariant tripped: {exc}")
     except Exception as exc:  # noqa: BLE001
@@ -159,9 +160,59 @@ def _check_registry() -> Check:
         return Check("registry", WARN, f"registry unreadable: {type(exc).__name__}: {exc}")
 
 
+def _check_default_models(cfg: Any) -> list[Check]:
+    """Per SUGGESTED-default role, is its model actually present locally yet?
+
+    Only reports roles still served by a shipped default (a user's config or a
+    promoted registry entry has already been chosen and is out of scope here).
+    A default that is not pulled is a WARN, never a FAIL: a fresh box has not
+    fetched anything, which is expected. Present ⇒ PASS. Any probe failure
+    degrades to a WARN, never a crash."""
+    out: list[Check] = []
+    try:
+        from .backends import ollama as _ollama
+        # Specific names: backends.__init__ re-exports the resolve() FUNCTION,
+        # shadowing the submodule attribute.
+        from .backends.resolve import _get, _roles, role_sources
+
+        roles = _roles(cfg)
+        sources = role_sources(cfg)
+    except Exception as exc:  # noqa: BLE001
+        return [Check("models:defaults", WARN, f"role table unreadable: {type(exc).__name__}: {exc}")]
+
+    for role, rc in roles.items():
+        if sources.get(role) != "default":
+            continue
+        model = _get(rc, "model")
+        backend = _get(rc, "backend") or "ollama"
+        name = f"model:{role}"
+        try:
+            if backend == "ollama":
+                present = _ollama.ollama_model_present(model)
+                if present:
+                    out.append(Check(name, PASS, f"{model}: pulled (ollama)"))
+                else:
+                    out.append(Check(
+                        name, WARN,
+                        f"{model}: not pulled (fetched on first use, or run "
+                        f"`ollama pull {model}`)",
+                    ))
+            else:
+                # MLX (and any non-ollama) has no clean one-liner pull; report
+                # only, and point at the acquisition path.
+                out.append(Check(
+                    name, WARN,
+                    f"{model}: {backend} model presence not probed here; fetch "
+                    f"via your model-acquisition path",
+                ))
+        except Exception as exc:  # noqa: BLE001
+            out.append(Check(name, WARN, f"{model}: presence probe failed ({type(exc).__name__})"))
+    return out
+
+
 def _check_engines(cfg: Any) -> list[Check]:
     """Serving engines: binaries present? endpoints reachable? ALWAYS report,
-    NEVER fail — a bare machine with no ollama/mlx is a valid, expected state."""
+    NEVER fail, a bare machine with no ollama/mlx is a valid, expected state."""
     out: list[Check] = []
 
     # binary presence (report only)
@@ -205,7 +256,7 @@ def _probe_endpoint(name: str, url: str) -> Check:
         return Check(
             f"endpoint:{name}",
             WARN,
-            f"unreachable ({type(exc).__name__}) — not running is fine on a bare machine",
+            f"unreachable ({type(exc).__name__}), not running is fine on a bare machine",
             {"url": url},
         )
 
