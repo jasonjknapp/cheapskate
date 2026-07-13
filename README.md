@@ -19,6 +19,16 @@ measures what that decision cost **on your hardware** and hands you the receipts
 
 ## Why I built this
 
+It began as a turf war over one computer. I'd bought a 128 GB Mac to run local models and offload
+the bulk work my Claude agents were doing. Meanwhile my son, studying abroad in Sydney, was remoting
+into that same Mac over Tailscale to drive its big models from LM Studio on his laptop, half a world
+away. A 128 GB box is generous until two people share it: he'd load a model, my jobs would try to
+load another, and the machine would thrash or OOM and kill whatever the other person was mid-way
+through. We needed a way for several people and several models to take turns on one Mac without
+stepping on each other. Once things shared the machine, the next question was whether any of the
+local detour was actually paying off, and nothing I could find measured it. So the coordinator grew
+a router, an econ engine, and receipts.
+
 There are good tools next to this one: LiteLLM (a cloud gateway), GPUStack (a serving cluster),
 RouteLLM (a strong-vs-weak query router), TensorZero (an LLMOps platform). I ran them down before
 writing a line. Each solves a real problem, and none of them centers the four things I actually
