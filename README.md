@@ -354,5 +354,4 @@ Portfolio-grade honesty, because the alternative gets shredded on the first read
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - License: [Apache-2.0](LICENSE) (explicit patent grant, deliberate)
 
-Built and maintained by [Jason Knapp](https://github.com/jasonjknapp), with
-[Bryan Knapp](https://github.com/Sirnapsalott) contributing to the ideation and testing.
+Co-created by [Jason Knapp](https://github.com/jasonjknapp) and [Bryan Knapp](https://github.com/Sirnapsalott). Jason writes the code; Bryan drives the ideation, the real-world testing, and the feature roadmap — the turf war in "Why I built this" is his side of the machine.
