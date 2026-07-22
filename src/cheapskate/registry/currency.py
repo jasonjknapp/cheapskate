@@ -25,8 +25,10 @@ the disk check and fill the volume mid-download.
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -103,6 +105,94 @@ def discover(
                 }
             )
     return out
+
+
+def discover_ranked(
+    role: str,
+    registry: dict[str, Any],
+    *,
+    api: HubApi | None = None,
+    limit: int = 100,
+    now: datetime | None = None,
+    pipeline_tag: str = "text-generation",
+) -> list[dict[str, Any]]:
+    """Globally discover and rank current candidates without a publisher list.
+
+    Hub metadata is only a shortlist prior; local job evals remain the promotion
+    gate. Recency intentionally carries the largest weight, followed by trending
+    and durable adoption signals. Repositories that advertise remote-code
+    requirements are excluded from autonomous installation.
+    """
+
+    incumbent = _registry.incumbent(registry, role)
+    now = now or datetime.now(timezone.utc)
+    if api is None:
+        try:
+            from huggingface_hub import HfApi
+
+            api = HfApi()
+        except Exception:  # noqa: BLE001
+            return []
+    try:
+        models = api.list_models(
+            sort="trendingScore",
+            direction=-1,
+            limit=limit,
+            pipeline_tag=pipeline_tag,
+            full=True,
+        )
+    except Exception:  # noqa: BLE001 - discovery failure cannot break serving
+        return []
+
+    out: list[dict[str, Any]] = []
+    for model in models:
+        repo = getattr(model, "id", None) or getattr(model, "modelId", None)
+        if not repo:
+            continue
+        tags = {str(tag).lower() for tag in (getattr(model, "tags", None) or [])}
+        if any(tag in tags for tag in ("trust_remote_code", "custom_code", "requires-remote-code")):
+            continue
+        modified = _as_datetime(getattr(model, "lastModified", None), now)
+        age_days = max(0.0, (now - modified).total_seconds() / 86400)
+        recency = math.exp(-age_days / 120.0)
+        downloads = _log_score(getattr(model, "downloads", 0), 10_000_000)
+        likes = _log_score(getattr(model, "likes", 0), 50_000)
+        trending = _log_score(getattr(model, "trendingScore", 0), 100)
+        score = 0.55 * recency + 0.15 * downloads + 0.10 * likes + 0.20 * trending
+        out.append({
+            "repo": repo,
+            "author": repo.split("/", 1)[0] if "/" in repo else "",
+            "last_modified": modified.isoformat(),
+            "same_lineage": same_lineage(incumbent, repo),
+            "score": round(score, 6),
+            "signals": {
+                "recency": round(recency, 6),
+                "downloads": int(getattr(model, "downloads", 0) or 0),
+                "likes": int(getattr(model, "likes", 0) or 0),
+                "trending": float(getattr(model, "trendingScore", 0) or 0),
+            },
+            "tags": sorted(tags),
+        })
+    return sorted(out, key=lambda item: (item["score"], item["last_modified"]), reverse=True)
+
+
+def _as_datetime(value: Any, fallback: datetime) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return fallback.replace(year=max(1970, fallback.year - 10))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _log_score(value: Any, reference: float) -> float:
+    try:
+        numeric = max(0.0, float(value or 0))
+    except (TypeError, ValueError):
+        numeric = 0.0
+    return min(1.0, math.log1p(numeric) / math.log1p(reference))
 
 
 # ── candidate sizing + fit gate (fail-closed, sizes the CANDIDATE) ───────────

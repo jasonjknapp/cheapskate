@@ -16,6 +16,7 @@ from cheapskate.backends.resolve import (
     infer_backend,
     port_of,
     resolve,
+    role_candidates,
 )
 
 
@@ -60,6 +61,21 @@ def test_resolve_unknown_model_infers_backend():
     spec = resolve(model="mystery:tag", config={"roles": {}})
     assert spec.backend == "ollama"
     assert spec.approx_gb is None
+
+
+def test_role_candidates_are_incumbent_fallback_rollback_and_skip_quarantine():
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+        "rollback": ["org/rollback", "org/bad"],
+        "quarantine": ["org/bad"],
+    }}}
+    candidates = role_candidates("reasoning", config=cfg)
+    assert [spec.model for spec in candidates] == [
+        "org/incumbent", "fallback:latest", "org/rollback",
+    ]
+    assert [spec.backend for spec in candidates] == ["mlx", "ollama", "mlx"]
 
 
 def test_resolve_config_backend_endpoint_override():

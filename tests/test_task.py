@@ -120,6 +120,35 @@ def test_model_exception_is_a_repairable_attempt_then_escalates():
     assert res["ok"] is False
 
 
+def test_local_job_repairs_then_switches_to_role_fallback():
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }})
+    calls = []
+
+    def complete(prompt, system=None, role=None, model=None):
+        calls.append((role, model))
+        if role == "reasoning":
+            return _envelope("bad")
+        return _envelope("good")
+
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=complete,
+        verify=lambda out, crit: (out == "good", "quality floor"),
+        max_retries=1,
+    )
+    assert res["ok"] is True
+    assert res["model"] == "fallback:latest"
+    assert calls == [
+        ("reasoning", None),
+        ("reasoning", None),
+        (None, "fallback:latest"),
+    ]
+
+
 def test_exhausted_local_run_emits_exactly_one_escalated_generation(monkeypatch):
     # R1: escalations must reach the receipts. A local run that exhausts its
     # retries (verify always rejects) emits one kind="generation" event PER

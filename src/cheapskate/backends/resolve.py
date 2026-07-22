@@ -211,6 +211,43 @@ def resolve(
     )
 
 
+def role_candidates(role: str, *, config: Any = None) -> list[BackendSpec]:
+    """Ordered compatible serving choices for a role.
+
+    The registry owns this order: incumbent, fallback, then retained rollback.
+    Job/model quarantines live one layer above this function; this list only
+    removes the role's global known-bad entries and duplicates.
+    """
+
+    role_entry = _roles(config).get(role)
+    if role_entry is None or not _get(role_entry, "model"):
+        raise LocalUnavailable(f"role {role!r} has no model configured")
+    quarantined = set(_get(role_entry, "quarantine", []) or [])
+    ordered = [
+        _get(role_entry, "model"),
+        _get(role_entry, "fallback"),
+        *(_get(role_entry, "rollback", []) or []),
+    ]
+    out: list[BackendSpec] = []
+    seen: set[str] = set()
+    incumbent = ordered[0]
+    for model in ordered:
+        if not model or model in seen or model in quarantined:
+            continue
+        seen.add(model)
+        if model == incumbent:
+            out.append(resolve(role=role, config=config))
+            continue
+        backend = infer_backend(model)
+        out.append(BackendSpec(
+            model=model,
+            backend=backend,
+            endpoint=default_endpoint(backend, config),
+            role=role,
+        ))
+    return out
+
+
 def port_of(spec: BackendSpec, default: int = MLX_PORT) -> int:
     """Extract the TCP port from a spec's endpoint (for MLX server targeting)."""
     ep = spec.endpoint or default_endpoint("mlx")

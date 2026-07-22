@@ -5,6 +5,7 @@ client. No network. Graceful degrade surfaces as CheapskateUnavailable."""
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -70,6 +71,22 @@ def test_complete_returns_text_and_metadata(registered_key):
     assert req["headers"]["Authorization"] == f"Bearer {registered_key}"
     # D8: the internal marker so the broker does not double-count this call in econ.
     assert req["headers"]["X-Cheapskate-Internal"] == "1"
+
+
+def test_complete_role_fails_over_to_registered_fallback(registered_key):
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent", "backend": "mlx", "fallback": "fallback:latest",
+    }}}
+    api = FakeClient([
+        FakeResponse(503, {"error": "incumbent unavailable"}),
+        FakeResponse(200, _chat_body("recovered", model="fallback:latest")),
+    ])
+    out = client.complete("hi", role="reasoning", config=cfg, api=api)
+    assert out["text"] == "recovered"
+    assert out["model"] == "fallback:latest"
+    assert [req["json"]["model"] for req in api.requests] == [
+        "role:reasoning", "fallback:latest",
+    ]
 
 
 def test_complete_passes_system_prompt(registered_key):
@@ -167,6 +184,18 @@ def test_generate_json_validates_pydantic_schema(registered_key):
     assert out == {"name": "pear", "qty": 3}
 
 
+def test_generate_json_repairs_valid_json_with_wrong_schema_root(registered_key):
+    api = FakeClient([
+        FakeResponse(200, _chat_body('[{"items": []}]')),
+        FakeResponse(200, _chat_body('{"items": []}')),
+    ])
+    schema = {"type": "object", "required": ["items"],
+              "properties": {"items": {"type": "array"}}}
+    out = client.generate_json("q", schema=schema, model="m", api=api, retries=1)
+    assert out == {"items": []}
+    assert len(api.requests) == 2
+
+
 def test_generate_json_transport_error_degrades(registered_key):
     class Boom:
         def post(self, *a, **k):
@@ -174,3 +203,32 @@ def test_generate_json_transport_error_degrades(registered_key):
 
     with pytest.raises(client.CheapskateUnavailable):
         client.generate_json("q", model="m", api=Boom())
+
+
+def test_generate_json_repairs_then_switches_role_fallback(registered_key):
+    cfg = {"roles": {"classification": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body("[]")),
+        FakeResponse(200, _chat_body("[]")),
+        FakeResponse(200, _chat_body('{"themes": []}', model="fallback:latest")),
+    ])
+
+    class Digest:
+        @classmethod
+        def model_validate_json(cls, text):
+            value = __import__("json").loads(text)
+            if not isinstance(value, dict):
+                raise ValueError("root must be an object")
+            return SimpleNamespace(model_dump=lambda: value)
+
+    out = client.generate_json(
+        "q", schema=Digest, role="classification", config=cfg, api=api, retries=1
+    )
+    assert out == {"themes": []}
+    assert [req["json"]["model"] for req in api.requests] == [
+        "org/incumbent", "org/incumbent", "fallback:latest",
+    ]

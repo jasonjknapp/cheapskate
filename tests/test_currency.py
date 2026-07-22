@@ -4,6 +4,7 @@ evaluate → promote/rollback, prune allowlist that never touches protected mode
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from cheapskate.registry import currency as cur
@@ -53,6 +54,42 @@ def test_discover_degrades_to_empty_on_api_failure():
 
     r = {"roles": {"reasoning": {"model": "v/m", "backend": "mlx"}}}
     assert cur.discover("reasoning", r, ["vendor"], api=Boom()) == []
+
+
+def test_discover_ranked_is_global_and_strongly_recency_weighted():
+    class GlobalApi:
+        def list_models(self, **kwargs):
+            assert "author" not in kwargs
+            return [
+                SimpleNamespace(
+                    id="unknown/new",
+                    lastModified="2026-07-20T00:00:00+00:00",
+                    downloads=50_000,
+                    likes=500,
+                    trendingScore=20,
+                    pipeline_tag="text-generation",
+                    tags=["mlx"],
+                ),
+                SimpleNamespace(
+                    id="famous/old",
+                    lastModified="2024-01-01T00:00:00+00:00",
+                    downloads=10_000_000,
+                    likes=50_000,
+                    trendingScore=100,
+                    pipeline_tag="text-generation",
+                    tags=["mlx"],
+                ),
+            ]
+
+    r = {"roles": {"reasoning": {"model": "v/inc", "backend": "mlx"}}}
+    out = cur.discover_ranked(
+        "reasoning",
+        r,
+        api=GlobalApi(),
+        now=datetime(2026, 7, 21, tzinfo=timezone.utc),
+    )
+    assert [c["repo"] for c in out] == ["unknown/new", "famous/old"]
+    assert out[0]["score"] > out[1]["score"]
 
 
 # ── candidate sizing + fit gate (fail-closed, sizes the CANDIDATE) ───────────

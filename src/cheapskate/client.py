@@ -176,10 +176,32 @@ def complete(
         {"role": "user", "content": prompt}
     ]
     start = time.monotonic()
-    body = _post_chat(
-        messages, model=model, role=role, temperature=temperature,
-        timeout=timeout, response_json=False, config=config, api=api,
-    )
+    try:
+        body = _post_chat(
+            messages, model=model, role=role, temperature=temperature,
+            timeout=timeout, response_json=False, config=config, api=api,
+        )
+    except CheapskateUnavailable as first_error:
+        if not role or model is not None:
+            raise
+        from .backends.resolve import role_candidates
+
+        body = None
+        last_error = first_error
+        for candidate in role_candidates(role, config=config)[1:]:
+            try:
+                body = _post_chat(
+                    messages, model=candidate.model, role=None,
+                    temperature=temperature, timeout=timeout,
+                    response_json=False, config=config, api=api,
+                )
+                break
+            except CheapskateUnavailable as exc:
+                last_error = exc
+        if body is None:
+            raise CheapskateUnavailable(
+                f"role {role!r} and its compatible fallbacks were unavailable: {last_error}"
+            ) from last_error
     text = _content(body)
     usage = body.get("usage") or {}
     return {
@@ -206,6 +228,45 @@ def _schema_format(schema: Any):
     raise TypeError(f"schema must be a pydantic model or dict, got {type(schema)}")
 
 
+def _validate_raw_schema(value: Any, schema: dict, path: str = "$") -> Any:
+    """Validate the dependency-free JSON-schema subset used by clients."""
+    expected = schema.get("type")
+    type_map = {
+        "object": dict, "array": list, "string": str,
+        "number": (int, float), "integer": int, "boolean": bool, "null": type(None),
+    }
+    if expected in type_map:
+        valid = isinstance(value, type_map[expected])
+        if expected in {"number", "integer"} and isinstance(value, bool):
+            valid = False
+        if not valid:
+            raise ValueError(f"{path} must be {expected}, got {type(value).__name__}")
+    if isinstance(value, dict):
+        missing = [key for key in schema.get("required", []) if key not in value]
+        if missing:
+            raise ValueError(f"{path} missing required keys: {', '.join(missing)}")
+        properties = schema.get("properties") or {}
+        for key, child in value.items():
+            if key in properties:
+                _validate_raw_schema(child, properties[key], f"{path}.{key}")
+        if schema.get("additionalProperties") is False:
+            extras = sorted(set(value) - set(properties))
+            if extras:
+                raise ValueError(f"{path} has unexpected keys: {', '.join(extras)}")
+    if isinstance(value, list):
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            raise ValueError(f"{path} exceeds maxItems={schema['maxItems']}")
+        if "minItems" in schema and len(value) < schema["minItems"]:
+            raise ValueError(f"{path} is below minItems={schema['minItems']}")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, child in enumerate(value):
+                _validate_raw_schema(child, item_schema, f"{path}[{index}]")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(f"{path} is not one of the permitted values")
+    return value
+
+
 def generate_json(
     prompt: str,
     *,
@@ -229,31 +290,48 @@ def generate_json(
     """
     validator = _schema_format(schema)
     sys_msg = ((system or "") + "\nReturn ONLY valid JSON matching the required schema.").strip()
-    messages = [
+    base_messages = [
         {"role": "system", "content": sys_msg},
         {"role": "user", "content": prompt},
     ]
     last_err: Optional[Exception] = None
-    for _ in range(retries + 1):
-        body = _post_chat(
-            messages, model=model, role=role, temperature=temperature,
-            timeout=timeout, response_json=True, config=config, api=api,
-        )
-        text = _content(body)
-        try:
-            if validator is not None:
-                return validator.model_validate_json(text).model_dump()
-            return json.loads(text)
-        except CheapskateUnavailable:
-            raise
-        except Exception as e:  # noqa: BLE001 — bad JSON / schema mismatch → retry
-            last_err = e
-            messages.append({"role": "assistant", "content": text})
-            messages.append({
-                "role": "user",
-                "content": "That was not valid per the required schema. "
-                           "Return ONLY valid JSON matching the schema.",
-            })
+    if role and model is None:
+        from .backends.resolve import role_candidates
+
+        candidates: list[str | None] = [
+            spec.model for spec in role_candidates(role, config=config)
+        ]
+    else:
+        candidates = [model]
+
+    for candidate in candidates:
+        messages = list(base_messages)
+        for _ in range(retries + 1):
+            try:
+                body = _post_chat(
+                    messages, model=candidate, role=None if candidate else role,
+                    temperature=temperature, timeout=timeout, response_json=True,
+                    config=config, api=api,
+                )
+                text = _content(body)
+                if validator is not None:
+                    return validator.model_validate_json(text).model_dump()
+                parsed = json.loads(text)
+                if isinstance(schema, dict):
+                    _validate_raw_schema(parsed, schema)
+                elif not isinstance(parsed, dict):
+                    raise ValueError(f"$ must be object, got {type(parsed).__name__}")
+                return parsed
+            except CheapskateUnavailable as exc:
+                last_err = exc
+            except Exception as exc:  # noqa: BLE001 — bad JSON/schema → repair
+                last_err = exc
+                messages.append({"role": "assistant", "content": text})
+                messages.append({
+                    "role": "user",
+                    "content": "That was not valid per the required schema. "
+                               "Return ONLY valid JSON matching the schema.",
+                })
     raise CheapskateUnavailable(
-        f"broker did not return schema-valid JSON after {retries + 1} tries: {last_err}"
+        f"no role-compatible model returned schema-valid JSON: {last_err}"
     )

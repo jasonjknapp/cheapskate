@@ -294,7 +294,7 @@ def run(
     # route == LOCAL
     complete = complete or _default_complete()
     return _run_local(
-        task_type, criteria, payload, role, patience,
+        task_type, criteria, payload, role, patience, config,
         verify=verify, complete=complete, max_retries=max_retries, user=user,
     )
 
@@ -326,6 +326,7 @@ def _run_local(
     payload: str,
     role: str,
     patience: str,
+    config: Config,
     *,
     verify: VerifyFn | None,
     complete: CompleteFn,
@@ -339,55 +340,73 @@ def _run_local(
     # max_retries repairs. ``retries`` is the number of repair attempts issued
     # after the first (attempts - 1), so a run that exhausts the budget reports
     # retries == max_retries, not max_retries + 1.
+    from ..backends.resolve import role_candidates
+
     attempts = 0
-    max_attempts = max_retries + 1
+    candidates = role_candidates(role, config=config)
     feedback: str | None = None
     last_env: dict[str, Any] = {"output": None, "self_confidence": None, "criteria_met": None}
     ok = False
     error_kind: str | None = None
 
-    while attempts < max_attempts:
-        attempts += 1
+    selected_model = candidates[0].model
+    for candidate_index, candidate in enumerate(candidates):
+        feedback = None
+        for candidate_attempt in range(max_retries + 1):
+            attempts += 1
         # This is the terminal attempt when the run has spent its whole budget.
         # A local run that ends not-ok on its terminal attempt IS the escalation
         # (the caller must step up a tier), so exactly that one generation event
         # carries escalated=True; a run that succeeds earlier breaks the loop and
         # never reaches an escalated=True emission.
-        is_last = attempts >= max_attempts
-        attempt_started = time.monotonic()
-        prompt = _build_prompt(criteria, payload, feedback)
-        attempt_ok = False
-        attempt_error: str | None = None
-        try:
-            raw = complete(prompt, system=ENVELOPE_SYSTEM, role=role)
-        except Exception as exc:  # noqa: BLE001 — a model/backend failure is a repairable attempt
-            error_kind = attempt_error = type(exc).__name__
-            feedback = f"model call failed: {error_kind}"
-            _emit_generation(
-                task_type, "local", role, user,
-                retries=attempts - 1, escalated=is_last, ok=False,
-                duration_s=round(time.monotonic() - attempt_started, 3),
-                error_kind=attempt_error,
+            is_last = (
+                candidate_index == len(candidates) - 1
+                and candidate_attempt >= max_retries
             )
-            continue
-        last_env = _parse_envelope(_completion_text(raw))
-        tokens_in, tokens_out = _completion_tokens(raw)
-        if verify is None:
-            ok = attempt_ok = True
-        else:
-            accepted, fb = verify(_as_text(last_env["output"]), criteria)
-            if accepted:
+            attempt_started = time.monotonic()
+            prompt = _build_prompt(criteria, payload, feedback)
+            attempt_ok = False
+            attempt_error: str | None = None
+            try:
+                if candidate_index == 0:
+                    raw = complete(prompt, system=ENVELOPE_SYSTEM, role=role)
+                else:
+                    raw = complete(prompt, system=ENVELOPE_SYSTEM, model=candidate.model)
+            except Exception as exc:  # noqa: BLE001 — classified recovery attempt
+                error_kind = attempt_error = type(exc).__name__
+                feedback = f"model call failed: {error_kind}"
+                _emit_generation(
+                    task_type, "local", candidate.model, user,
+                    retries=attempts - 1, escalated=is_last, ok=False,
+                    duration_s=round(time.monotonic() - attempt_started, 3),
+                    error_kind=attempt_error,
+                )
+                continue
+            last_env = _parse_envelope(_completion_text(raw))
+            tokens_in, tokens_out = _completion_tokens(raw)
+            if verify is None:
                 ok = attempt_ok = True
             else:
-                error_kind = attempt_error = "verify_failed"
-                feedback = fb
-        _emit_generation(
-            task_type, "local", role, user,
-            retries=attempts - 1, escalated=(is_last and not attempt_ok), ok=attempt_ok,
-            duration_s=round(time.monotonic() - attempt_started, 3),
-            error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        if attempt_ok:
+                accepted, fb = verify(_as_text(last_env["output"]), criteria)
+                if accepted:
+                    ok = attempt_ok = True
+                else:
+                    error_kind = attempt_error = "verify_failed"
+                    feedback = fb
+            _emit_generation(
+                task_type, "local", candidate.model, user,
+                retries=attempts - 1, escalated=(is_last and not attempt_ok), ok=attempt_ok,
+                duration_s=round(time.monotonic() - attempt_started, 3),
+                error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
+            )
+            if attempt_ok:
+                selected_model = (
+                    raw.get("model", candidate.model)
+                    if isinstance(raw, dict)
+                    else candidate.model
+                )
+                break
+        if ok:
             break
 
     retries = attempts - 1
@@ -397,7 +416,7 @@ def _run_local(
         "task.run",
         task_type=task_type,
         route="local",
-        model=role,
+        model=selected_model,
         user=user,
         retries=retries,
         escalated=escalated,
@@ -409,6 +428,7 @@ def _run_local(
         "task_type": task_type,
         "route": "local",
         "role": role,
+        "model": selected_model,
         "output": last_env["output"],
         "self_confidence": last_env.get("self_confidence"),
         "criteria_met": last_env.get("criteria_met"),

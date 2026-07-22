@@ -242,6 +242,24 @@ New local models ship constantly. Cheapskate can auto-discover them (Hugging Fac
 rollback targets protected from ever being pruned. Stop choosing models by vibes; choose them by
 whether they pass your bar and what they cost you per token.
 
+Discovery is global rather than tied to a publisher list. Its shortlist score weights release
+recency most heavily, then trending, downloads, and likes; those signals never override the local
+quality gate. Managed models can be reclaimed least-recently-used first, but only when they are
+eligible and are not an incumbent, fallback, rollback, or pin. A vanished upstream
+source does not make an obsolete model undeletable.
+
+## Model-independent jobs and self-healing
+
+Jobs target a role and a `JobContract` (capabilities, output mode, quality floor, repair budget,
+and deadline), not a model id. A role request tries its incumbent, then only that role's fallback
+and retained rollback. Structured calls repair invalid output for a bounded number of attempts,
+then change models; a bad response shape is a job/model incompatibility, not a server outage.
+
+`SelfHealingEngine` is adapter-driven: connect your installed-model probe, discovery, guarded
+installer, eval suite, notification sink, and deletion backend. If installed candidates are
+exhausted it ranks compatible discovery candidates, installs one behind your fit gate, and retries.
+It never silently sends a never-cloud job to a cloud model.
+
 ## Safety classes: both directions, fail closed
 
 Two symmetric hard classes, enforced in the router *before* any dial logic runs:
@@ -287,7 +305,7 @@ own tokens for judgement.
 Ollama/MLX endpoint. The `machine_id` field flows through telemetry and the econ report, so tokens/sec
 and watts are tracked per machine. Your desktop can dispatch to the GPU box in the other room today.
 
-**v0.2 (roadmap): the fleet agent.** Remote load/swap, per-machine locks, auto-discovery: "your
+**v0.2 (roadmap): the fleet agent.** Remote load/swap and per-machine locks: "your
 household is now a fleet." Cheapskate schedules *tasks* across machines; it never shards a model
 across them (that's a different tool's lane).
 
@@ -341,7 +359,7 @@ Portfolio-grade honesty, because the alternative gets shredded on the first read
 
 - **v0.1 (now):** core routing, econ engine + receipts, cloud tier, safety classes, eval-gated
   currency, remote backends, OpenAI-compatible + MCP surfaces, CI.
-- **v0.2:** the fleet agent (remote load/swap, per-machine locks, auto-discovery); a community
+- **v0.2:** the fleet agent (remote load/swap and per-machine locks); a community
   hardware-benchmark corpus (see [BENCHMARKS.md](BENCHMARKS.md); PRs open now).
 - **Later, maybe:** an interactive local-vs-cloud calculator seeded from published aggregates.
   Explicitly *not* on the roadmap: sharded inference, a 100-provider gateway, a hosted service.
