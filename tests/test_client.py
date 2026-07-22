@@ -89,6 +89,25 @@ def test_complete_role_fails_over_to_registered_fallback(registered_key):
     ]
 
 
+@pytest.mark.parametrize("bad_body", [
+    _chat_body(""),
+    {"model": "org/incumbent", "choices": []},
+])
+def test_complete_role_fails_over_after_malformed_success(registered_key, bad_body):
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent", "backend": "mlx", "fallback": "fallback:latest",
+    }}}
+    api = FakeClient([
+        FakeResponse(200, bad_body),
+        FakeResponse(200, _chat_body("recovered", model="fallback:latest")),
+    ])
+    out = client.complete("hi", role="reasoning", config=cfg, api=api)
+    assert out["text"] == "recovered"
+    assert [request["json"]["model"] for request in api.requests] == [
+        "role:reasoning", "fallback:latest",
+    ]
+
+
 def test_complete_passes_system_prompt(registered_key):
     api = FakeClient([FakeResponse(200, _chat_body("ok"))])
     client.complete("q", system="be terse", model="m:tag", api=api)

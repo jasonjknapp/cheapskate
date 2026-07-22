@@ -8,9 +8,11 @@ retain their backend-specific invocation, validation, and installation code.
 
 from __future__ import annotations
 
-import json
-import os
 import fcntl
+import json
+import math
+import os
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -37,6 +39,7 @@ class RunResult:
     backend: str
     attempts: int
     recovered: bool
+    notification_failures: tuple[dict[str, str], ...] = ()
 
 
 class NoCompatibleModel(RuntimeError):
@@ -147,9 +150,59 @@ class SelfHealingEngine:
         *,
         compatibility: CompatibilityStore | None = None,
         notify: NotifyFn | None = None,
+        monotonic: Callable[[], float] | None = None,
     ):
         self.compatibility = compatibility or CompatibilityStore()
         self.notify = notify or (lambda event: None)
+        self.monotonic = monotonic or time.monotonic
+        self.notification_failures: list[dict[str, str]] = []
+
+    def _notify(self, event: dict[str, Any]) -> None:
+        """Deliver a notification without making observability a serving dependency."""
+
+        try:
+            self.notify(event)
+        except Exception as exc:  # noqa: BLE001 - recovery must survive a broken sink
+            self.notification_failures.append({
+                "event": str(event.get("event") or "unknown"),
+                "job_id": str(event.get("job_id") or ""),
+                "error": f"{type(exc).__name__}: {exc}"[:300],
+            })
+
+    def _deadline_exhausted(
+        self,
+        contract: JobContract,
+        started_at: float,
+        failures: list[dict[str, str]],
+        model: str,
+    ) -> bool:
+        """True once the job deadline plus allowed late window has elapsed.
+
+        The engine checks this boundary before starting each adapter operation and
+        before accepting its result. Adapters still own cancellation/timeouts for
+        an individual blocking call; no thread or process is leaked to fake that.
+        """
+
+        if contract.deadline_s is None:
+            return False
+        budget_s = contract.deadline_s + contract.bounded_late_s
+        if self.monotonic() <= started_at + budget_s:
+            return False
+        detail = (
+            f"contract deadline exhausted after {budget_s:g}s "
+            f"({contract.deadline_s:g}s deadline + {contract.bounded_late_s:g}s late window)"
+        )
+        if not any(
+            failure.get("kind") == FailureKind.TIMEOUT.value
+            and str(failure.get("detail", "")).startswith("contract deadline exhausted")
+            for failure in failures
+        ):
+            failures.append({
+                "model": model,
+                "kind": FailureKind.TIMEOUT.value,
+                "detail": detail,
+            })
+        return True
 
     def run(
         self,
@@ -164,16 +217,21 @@ class SelfHealingEngine:
         evaluate: EvaluateFn | None = None,
         promote: PromoteFn | None = None,
     ) -> RunResult:
+        self.notification_failures = []
+        started_at = self.monotonic()
         attempts = 0
         failures: list[dict[str, str]] = []
         candidates = self._eligible(contract, installed, require_installed=True)
         result, attempts = self._try_candidates(
-            contract, candidates, invoke, validate, attempts, failures
+            contract, candidates, invoke, validate, attempts, failures, started_at
         )
         if result is not None:
             return result
 
-        if discover is not None and install is not None:
+        deadline_exhausted = self._deadline_exhausted(
+            contract, started_at, failures, "discovery"
+        )
+        if not deadline_exhausted and discover is not None and install is not None:
             if fit is None or evaluate is None or promote is None:
                 failures.append({
                     "model": "discovery",
@@ -182,17 +240,29 @@ class SelfHealingEngine:
                 })
                 discovered = []
             else:
-                discovered = self._eligible(
-                    contract,
-                    discover(contract),
-                    include_blocked=False,
-                    require_installed=False,
-                    rank_discovery=True,
-                )
+                discovered_raw = discover(contract)
+                if self._deadline_exhausted(contract, started_at, failures, "discovery"):
+                    discovered = []
+                else:
+                    discovered = self._eligible(
+                        contract,
+                        discovered_raw,
+                        include_blocked=False,
+                        require_installed=False,
+                        rank_discovery=True,
+                    )
             for candidate in discovered:
                 if candidate.model in {c.model for c in candidates}:
                     continue
+                if self._deadline_exhausted(
+                    contract, started_at, failures, candidate.model
+                ):
+                    break
                 fits, fit_detail = fit(candidate, contract)
+                if self._deadline_exhausted(
+                    contract, started_at, failures, candidate.model
+                ):
+                    break
                 if not fits:
                     failures.append({
                         "model": candidate.model,
@@ -203,13 +273,21 @@ class SelfHealingEngine:
                 if not install(candidate):
                     failures.append({"model": candidate.model, "kind": "install_failed"})
                     continue
-                self.notify({
+                self._notify({
                     "event": "model_installed",
                     "job_id": contract.job_id,
                     "model": candidate.model,
                     "backend": candidate.backend,
                 })
+                if self._deadline_exhausted(
+                    contract, started_at, failures, candidate.model
+                ):
+                    break
                 eval_ok, eval_detail, quality = evaluate(candidate, contract)
+                if self._deadline_exhausted(
+                    contract, started_at, failures, candidate.model
+                ):
+                    break
                 if not eval_ok or quality < contract.quality_floor:
                     detail = (
                         eval_detail
@@ -232,7 +310,7 @@ class SelfHealingEngine:
                         "detail": "promotion gate refused candidate",
                     })
                     continue
-                self.notify({
+                self._notify({
                     "event": "model_promoted",
                     "job_id": contract.job_id,
                     "model": candidate.model,
@@ -240,7 +318,7 @@ class SelfHealingEngine:
                     "quality": quality,
                 })
                 result, attempts = self._try_candidates(
-                    contract, [candidate], invoke, validate, attempts, failures
+                    contract, [candidate], invoke, validate, attempts, failures, started_at
                 )
                 if result is not None:
                     return result
@@ -251,7 +329,7 @@ class SelfHealingEngine:
             "role": contract.role,
             "failures": failures,
         }
-        self.notify(event)
+        self._notify(event)
         raise NoCompatibleModel(
             f"no compatible model satisfied {contract.job_id!r}; failures={failures}"
         )
@@ -290,6 +368,7 @@ class SelfHealingEngine:
         validate: ValidateFn,
         attempts: int,
         failures: list[dict[str, str]],
+        started_at: float,
     ) -> tuple[RunResult | None, int]:
         candidate_list = list(candidates)
         first_model = candidate_list[0].model if candidate_list else None
@@ -298,9 +377,17 @@ class SelfHealingEngine:
             final_kind = FailureKind.UNKNOWN
             final_detail = "unknown failure"
             for _ in range(contract.repair_attempts + 1):
+                if self._deadline_exhausted(
+                    contract, started_at, failures, candidate.model
+                ):
+                    return None, attempts
                 attempts += 1
                 try:
                     output = invoke(candidate, feedback)
+                    if self._deadline_exhausted(
+                        contract, started_at, failures, candidate.model
+                    ):
+                        return None, attempts
                     assessment = validate(output)
                     valid, detail = assessment[:2]
                     quality = assessment[2] if len(assessment) > 2 else (1.0 if valid else 0.0)
@@ -308,7 +395,7 @@ class SelfHealingEngine:
                         self.compatibility.mark_compatible(contract.job_id, candidate.model)
                         recovered = attempts > 1 or candidate.model != first_model
                         if recovered:
-                            self.notify({
+                            self._notify({
                                 "event": "model_failover_succeeded",
                                 "job_id": contract.job_id,
                                 "model": candidate.model,
@@ -321,6 +408,7 @@ class SelfHealingEngine:
                             backend=candidate.backend,
                             attempts=attempts,
                             recovered=recovered,
+                            notification_failures=tuple(self.notification_failures),
                         ), attempts
                     if valid:
                         detail = (
@@ -386,10 +474,15 @@ def lru_prune_plan(
             "rollback",
         )):
             continue
-        size = float(meta.get("size_gb") or meta.get("approx_gb") or 0)
-        if size <= 0:
+        try:
+            size = float(meta.get("size_gb") or meta.get("approx_gb") or 0)
+        except (TypeError, ValueError):
             continue
-        eligible.append({"model": model, "size_gb": size, **meta})
+        if not math.isfinite(size) or size <= 0:
+            continue
+        # State metadata is untrusted bookkeeping. It must not replace the map's
+        # canonical model identity or the positive numeric size validated above.
+        eligible.append({**meta, "model": model, "size_gb": size})
     eligible.sort(key=lambda item: (item.get("last_used") or "", item["model"]))
     plan: list[dict[str, Any]] = []
     freed = 0.0

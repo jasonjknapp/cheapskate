@@ -39,7 +39,8 @@ src/cheapskate/
 │                     incumbent + fallback + rollback targets are NEVER pruned
 ├── contracts.py      model-independent job requirements + failure taxonomy
 ├── self_healing.py   bounded repair/failover/install; job-scoped compatibility;
-│                     protected, source-independent LRU planning
+│                     monotonic deadline admission/acceptance checks; protected,
+│                     source-independent LRU planning
 ├── cloud/
 │   ├── __init__.py   public surface: dispatch_role(), provider_for_role(), CloudError
 │   └── adapters.py   thin cloud tier: openai-compat + anthropic adapters (lazy SDK imports,

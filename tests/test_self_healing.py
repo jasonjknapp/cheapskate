@@ -1,8 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
 from cheapskate.contracts import FailureKind, JobContract, classify_failure
-from cheapskate.self_healing import Candidate, SelfHealingEngine, lru_prune_plan
+from cheapskate.self_healing import (
+    Candidate,
+    CompatibilityStore,
+    NoCompatibleModel,
+    SelfHealingEngine,
+    lru_prune_plan,
+)
 
 
 def test_failure_taxonomy_does_not_call_bad_schema_an_outage():
@@ -76,11 +86,33 @@ def test_engine_installs_best_ranked_candidate_when_installed_fleet_exhausted():
         validate=lambda value: (value == "useful coaching", "quality floor"),
         discover=lambda _contract: discovered,
         install=install,
+        fit=lambda candidate, _contract: (True, "fits"),
+        evaluate=lambda candidate, _contract: (True, "job canary passed", 1.0),
+        promote=lambda candidate, _contract: True,
     )
 
     assert result.model == "new-best"
     assert installed == ["new-best"]
-    assert [n["event"] for n in notices][-2:] == ["model_installed", "model_failover_succeeded"]
+    assert [n["event"] for n in notices][-3:] == [
+        "model_installed",
+        "model_promoted",
+        "model_failover_succeeded",
+    ]
+
+
+def test_discovery_fails_closed_without_fit_eval_and_promotion_gates():
+    installed: list[str] = []
+    engine = SelfHealingEngine()
+    with pytest.raises(NoCompatibleModel, match="requires fit, eval/canary, and promotion"):
+        engine.run(
+            JobContract(job_id="guarded.discovery", role="reasoning", repair_attempts=0),
+            [],
+            invoke=lambda model, feedback: "unused",
+            validate=lambda value: (True, ""),
+            discover=lambda contract: [Candidate("unguarded", "mlx")],
+            install=lambda candidate: installed.append(candidate.model) or True,
+        )
+    assert installed == []
 
 
 def test_capability_mismatch_is_skipped_without_invocation():
@@ -124,8 +156,8 @@ def test_lru_prune_does_not_require_upstream_availability():
     )] == ["discontinued"]
 
 
-def test_candidate_order_prefers_discovery_score_not_latency():
-    contract = JobContract(job_id="quality.first", role="reasoning")
+def test_installed_candidate_order_preserves_incumbent_then_fallback_contract():
+    contract = JobContract(job_id="role.order", role="reasoning")
     candidates = [
         Candidate("fast", "mlx", discovery_score=0.7, latency_ms=100),
         Candidate("best", "mlx", discovery_score=0.95, latency_ms=9000),
@@ -137,4 +169,160 @@ def test_candidate_order_prefers_discovery_score_not_latency():
         invoke=lambda model, feedback: model.model,
         validate=lambda value: (True, ""),
     )
-    assert result.model == "best"
+    assert result.model == "fast"
+
+
+def test_never_cloud_contract_filters_remote_candidates():
+    contract = JobContract(job_id="private.job", role="reasoning")
+    called: list[str] = []
+    result = SelfHealingEngine().run(
+        contract,
+        [
+            Candidate("remote", "cloud"),
+            Candidate("local", "mlx"),
+        ],
+        invoke=lambda model, feedback: called.append(model.model) or "ok",
+        validate=lambda value: (True, ""),
+    )
+    assert result.model == "local"
+    assert called == ["local"]
+
+
+def test_job_quarantine_expires(tmp_path):
+    clock = [datetime(2026, 7, 21, tzinfo=timezone.utc)]
+    store = CompatibilityStore(
+        tmp_path / "compatibility.json",
+        ttl_s=60,
+        now=lambda: clock[0],
+    )
+    store.block("job", "model", FailureKind.QUALITY, "bad output")
+    assert store.is_blocked("job", "model")
+    clock[0] += timedelta(seconds=61)
+    assert not store.is_blocked("job", "model")
+
+
+def test_compatibility_store_merges_writes_from_two_live_instances(tmp_path):
+    path = tmp_path / "compatibility.json"
+    first = CompatibilityStore(path)
+    second = CompatibilityStore(path)
+
+    first.block("job.one", "model-a", FailureKind.QUALITY, "bad output")
+    second.block("job.two", "model-b", FailureKind.SCHEMA, "wrong shape")
+
+    observed = CompatibilityStore(path)
+    assert observed.is_blocked("job.one", "model-a")
+    assert observed.is_blocked("job.two", "model-b")
+
+
+def test_notification_failure_does_not_abort_successful_failover():
+    calls: list[str] = []
+
+    def broken_notify(_event):
+        raise RuntimeError("notification service unavailable")
+
+    result = SelfHealingEngine(notify=broken_notify).run(
+        JobContract(job_id="notify.failsoft", role="reasoning", repair_attempts=0),
+        [Candidate("bad", "mlx"), Candidate("good", "ollama")],
+        invoke=lambda candidate, _feedback: calls.append(candidate.model) or candidate.model,
+        validate=lambda value: (value == "good", "quality floor"),
+    )
+
+    assert result.model == "good"
+    assert calls == ["bad", "good"]
+    assert result.notification_failures == ({
+        "event": "model_failover_succeeded",
+        "job_id": "notify.failsoft",
+        "error": "RuntimeError: notification service unavailable",
+    },)
+
+
+def test_deadline_rejects_result_that_finishes_beyond_late_window():
+    clock = [0.0]
+    invoked: list[str] = []
+
+    def invoke(candidate, _feedback):
+        invoked.append(candidate.model)
+        clock[0] = 16.0
+        return "otherwise valid"
+
+    engine = SelfHealingEngine(monotonic=lambda: clock[0])
+    with pytest.raises(NoCompatibleModel, match="contract deadline exhausted"):
+        engine.run(
+            JobContract(
+                job_id="bounded.job",
+                role="reasoning",
+                repair_attempts=2,
+                deadline_s=10,
+                bounded_late_s=5,
+            ),
+            [Candidate("slow", "mlx"), Candidate("fallback", "ollama")],
+            invoke=invoke,
+            validate=lambda value: (True, ""),
+        )
+
+    assert invoked == ["slow"]
+
+
+def test_bounded_late_window_accepts_quality_result_within_grace():
+    clock = [0.0]
+
+    def invoke(_candidate, _feedback):
+        clock[0] = 11.0
+        return "valid"
+
+    result = SelfHealingEngine(monotonic=lambda: clock[0]).run(
+        JobContract(
+            job_id="bounded.late",
+            role="reasoning",
+            deadline_s=10,
+            bounded_late_s=2,
+        ),
+        [Candidate("quality", "mlx")],
+        invoke=invoke,
+        validate=lambda value: (True, "", 1.0),
+    )
+    assert result.model == "quality"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"deadline_s": -1}, "deadline_s"),
+        ({"bounded_late_s": -1}, "bounded_late_s"),
+    ],
+)
+def test_contract_rejects_negative_time_budgets(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        JobContract(job_id="invalid", role="reasoning", **kwargs)
+
+
+def test_lru_prune_protects_fleet_state_flags_without_upstream_gate():
+    managed = {
+        "fallback": {"size_gb": 30, "last_used": "2024-01-01", "fallback": True},
+        "loaded": {"size_gb": 30, "last_used": "2024-01-01", "loaded": True},
+        "obsolete": {
+            "size_gb": 30,
+            "last_used": "2024-01-01",
+            "redownloadable": False,
+        },
+    }
+    plan = lru_prune_plan(managed, protected=set(), need_gb=10)
+    assert [item["model"] for item in plan] == ["obsolete"]
+
+
+def test_lru_metadata_cannot_override_validated_model_or_size():
+    managed = {
+        "canonical": {
+            "model": "spoofed",
+            "size_gb": 12,
+            "last_used": "2024-01-01",
+        },
+        "invalid": {"size_gb": "unknown", "last_used": "2023-01-01"},
+        "infinite": {"size_gb": float("inf"), "last_used": "2023-01-01"},
+    }
+    plan = lru_prune_plan(managed, protected=set(), need_gb=1)
+    assert plan == [{
+        "model": "canonical",
+        "size_gb": 12.0,
+        "last_used": "2024-01-01",
+    }]

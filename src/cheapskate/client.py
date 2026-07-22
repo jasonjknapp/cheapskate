@@ -176,33 +176,36 @@ def complete(
         {"role": "user", "content": prompt}
     ]
     start = time.monotonic()
-    try:
-        body = _post_chat(
-            messages, model=model, role=role, temperature=temperature,
-            timeout=timeout, response_json=False, config=config, api=api,
-        )
-    except CheapskateUnavailable as first_error:
-        if not role or model is not None:
-            raise
+    candidates = [(model, role)]
+    if role and model is None:
         from .backends.resolve import role_candidates
 
-        body = None
-        last_error = first_error
-        for candidate in role_candidates(role, config=config)[1:]:
-            try:
-                body = _post_chat(
-                    messages, model=candidate.model, role=None,
-                    temperature=temperature, timeout=timeout,
-                    response_json=False, config=config, api=api,
-                )
-                break
-            except CheapskateUnavailable as exc:
-                last_error = exc
-        if body is None:
-            raise CheapskateUnavailable(
-                f"role {role!r} and its compatible fallbacks were unavailable: {last_error}"
-            ) from last_error
-    text = _content(body)
+        candidates.extend(
+            (candidate.model, None)
+            for candidate in role_candidates(role, config=config)[1:]
+        )
+
+    body = None
+    text = None
+    last_error = None
+    for candidate_model, candidate_role in candidates:
+        try:
+            candidate_body = _post_chat(
+                messages, model=candidate_model, role=candidate_role,
+                temperature=temperature, timeout=timeout,
+                response_json=False, config=config, api=api,
+            )
+            candidate_text = _content(candidate_body)
+            body, text = candidate_body, candidate_text
+            break
+        except CheapskateUnavailable as exc:
+            last_error = exc
+    if body is None or text is None:
+        if not role or model is not None:
+            raise last_error or CheapskateUnavailable("completion failed")
+        raise CheapskateUnavailable(
+            f"role {role!r} and its compatible fallbacks were unavailable: {last_error}"
+        ) from last_error
     usage = body.get("usage") or {}
     return {
         "text": text,

@@ -43,6 +43,10 @@ class JobContract:
         object.__setattr__(self, "required_capabilities", frozenset(self.required_capabilities))
         if self.repair_attempts < 0:
             raise ValueError("repair_attempts must be >= 0")
+        if self.deadline_s is not None and self.deadline_s < 0:
+            raise ValueError("deadline_s must be >= 0 or None")
+        if self.bounded_late_s < 0:
+            raise ValueError("bounded_late_s must be >= 0")
         if not 0 <= self.quality_floor <= 1:
             raise ValueError("quality_floor must be between 0 and 1")
         if self.privacy not in {"never_cloud", "cloud_allowed"}:

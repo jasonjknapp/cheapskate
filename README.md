@@ -254,6 +254,9 @@ Jobs target a role and a `JobContract` (capabilities, output mode, quality floor
 and deadline), not a model id. A role request tries its incumbent, then only that role's fallback
 and retained rollback. Structured calls repair invalid output for a bounded number of attempts,
 then change models; a bad response shape is a job/model incompatibility, not a server outage.
+The engine checks `deadline_s + bounded_late_s` before every adapter operation and before accepting
+its result. Backend adapters remain responsible for interrupting a single blocking model/install
+call at that same deadline; the engine will not leak a worker thread or process to simulate cancellation.
 
 `SelfHealingEngine` is adapter-driven: connect your installed-model probe, discovery, guarded
 installer, eval suite, notification sink, and deletion backend. If installed candidates are
