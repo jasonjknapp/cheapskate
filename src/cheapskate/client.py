@@ -292,6 +292,19 @@ def _endpoint_is_local(endpoint: str | None) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
 
 
+def _never_cloud_route_is_local(*, model: str | None, role: str | None, config: Any) -> bool:
+    """Prove both the broker hop and the resolved serving hop stay on loopback."""
+    if not _endpoint_is_local(_broker_base(config)):
+        return False
+    try:
+        from .backends.resolve import resolve
+
+        spec = resolve(role=role if model is None else None, model=model, config=config)
+    except Exception:  # noqa: BLE001 - unknown provenance fails closed
+        return False
+    return _endpoint_is_local(spec.endpoint)
+
+
 def generate_json(
     prompt: str,
     *,
@@ -317,6 +330,12 @@ def generate_json(
     ``retries`` times. Raises :class:`CheapskateUnavailable` on a hard failure or
     if still invalid after the retries. NEVER falls back to cloud.
     """
+    if privacy == "never_cloud" and not _never_cloud_route_is_local(
+        model=model, role=role, config=config,
+    ):
+        raise CheapskateUnavailable(
+            "never_cloud requires a verified loopback broker and serving endpoint"
+        )
     validator = _schema_format(schema)
     sys_msg = ((system or "") + "\nReturn ONLY valid JSON matching the required schema.").strip()
     base_messages = [

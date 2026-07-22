@@ -352,7 +352,14 @@ def test_default_roles_shape():
         assert isinstance(rc["approx_gb"], float) and rc["approx_gb"] > 0
     # the specific reference fleet is shipped
     assert dr["code"]["model"] == "qwen3-coder:30b"
-    assert dr["classification"]["backend"] == "mlx"
+    assert dr["classification"]["backend"] == "ollama"
+
+
+def test_classification_default_resolves_to_ollama_runtime():
+    spec = resolve(role="classification", config={"roles": {}})
+    assert spec.model == "qwen3.5:9b-mlx"
+    assert spec.backend == "ollama"
+    assert spec.endpoint.endswith(":11434")
 
 
 def test_resolve_falls_back_to_default_when_config_and_registry_empty():

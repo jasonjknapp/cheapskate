@@ -66,7 +66,7 @@ def default_roles() -> dict[str, dict[str, Any]]:
     return {
         "reasoning": {"model": "gpt-oss:120b", "backend": "ollama", "approx_gb": 65.0},
         "code": {"model": "qwen3-coder:30b", "backend": "ollama", "approx_gb": 18.0},
-        "classification": {"model": "qwen3.5:9b-mlx", "backend": "mlx", "approx_gb": 9.0},
+        "classification": {"model": "qwen3.5:9b-mlx", "backend": "ollama", "approx_gb": 9.0},
         "creative": {"model": "gemma-4-31b", "backend": "ollama", "approx_gb": 19.0},
     }
 

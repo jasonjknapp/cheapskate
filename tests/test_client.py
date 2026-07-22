@@ -309,3 +309,18 @@ def test_generate_json_never_cloud_rejects_remote_endpoint(
             privacy="never_cloud",
         )
     assert api.requests == []
+
+
+@pytest.mark.parametrize(
+    "routing", [{"role": "classification"}, {"model": "local:latest"}],
+)
+def test_generate_json_never_cloud_rejects_remote_broker_before_http(
+    registered_key, monkeypatch, routing
+):
+    monkeypatch.setenv("CHEAPSKATE_BROKER_URL", "https://remote.example.com")
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}'))])
+    with pytest.raises(client.CheapskateUnavailable, match="loopback broker"):
+        client.generate_json(
+            "private", api=api, privacy="never_cloud", retries=0, **routing,
+        )
+    assert api.requests == []
