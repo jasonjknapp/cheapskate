@@ -56,11 +56,31 @@ def test_rollback_restores_previous():
     r = {"roles": {}}
     reg.set_incumbent(r, "code", "old", "ollama")
     reg.set_incumbent(r, "code", "new", "ollama")
-    restored = reg.rollback(r, "code")
+    restored = reg.rollback(r, "code", installed=lambda _model, _backend: True)
     assert restored == "old"
     assert r["roles"]["code"]["model"] == "old"
     # reversible: 'new' is now the rollback
     assert r["roles"]["code"]["rollback"] == ["new"]
+
+
+def test_cross_backend_rollback_restores_full_serving_snapshot():
+    r = {"roles": {}}
+    reg.set_incumbent(
+        r, "code", "old", "ollama", endpoint="http://127.0.0.1:11434",
+        approx_gb=30, fallback="old-fallback",
+    )
+    reg.set_incumbent(
+        r, "code", "new", "mlx", endpoint="http://127.0.0.1:8080",
+        approx_gb=80, fallback="new-fallback",
+    )
+    restored = reg.rollback(r, "code", installed=lambda model, backend: (
+        model == "old" and backend == "ollama"
+    ))
+    assert restored == "old"
+    assert r["roles"]["code"]["backend"] == "ollama"
+    assert r["roles"]["code"]["endpoint"] == "http://127.0.0.1:11434"
+    assert r["roles"]["code"]["approx_gb"] == 30
+    assert r["roles"]["code"]["fallback"] == "old-fallback"
 
 
 def test_rollback_none_when_no_history():

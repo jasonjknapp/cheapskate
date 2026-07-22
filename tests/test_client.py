@@ -288,3 +288,24 @@ def test_generate_json_skips_uninstalled_incumbent(registered_key, monkeypatch):
     )
     assert out == {"ok": True}
     assert [request["json"]["model"] for request in api.requests] == ["present:latest"]
+
+
+def test_generate_json_never_cloud_rejects_remote_endpoint(
+    registered_key, monkeypatch
+):
+    cfg = {"roles": {"classification": {
+        "model": "remote:latest",
+        "backend": "ollama",
+        "endpoint": "https://models.example.com/v1",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}'))])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json(
+            "q", role="classification", config=cfg, api=api,
+            required_capabilities={"classification", "json"}, retries=0,
+            privacy="never_cloud",
+        )
+    assert api.requests == []

@@ -44,8 +44,8 @@ def test_failover_repairs_once_then_uses_compatible_installed_model():
     result = engine.run(
         contract,
         [
-            Candidate("fast-but-wrong", "mlx", frozenset({"json"})),
-            Candidate("reliable", "ollama", frozenset({"json"})),
+            Candidate("fast-but-wrong", "mlx", frozenset({"json"}), local=True),
+            Candidate("reliable", "ollama", frozenset({"json"}), local=True),
         ],
         invoke=invoke,
         validate=validate,
@@ -68,8 +68,10 @@ def test_engine_installs_best_ranked_candidate_when_installed_fleet_exhausted():
     installed: list[str] = []
     contract = JobContract(job_id="sara.coach", role="reasoning", required_capabilities={"reasoning"})
     discovered = [
-        Candidate("new-best", "mlx", frozenset({"reasoning"}), discovery_score=0.93),
-        Candidate("older", "mlx", frozenset({"reasoning"}), discovery_score=0.88),
+        Candidate("new-best", "mlx", frozenset({"reasoning"}), discovery_score=0.93,
+                  local=True),
+        Candidate("older", "mlx", frozenset({"reasoning"}), discovery_score=0.88,
+                  local=True),
     ]
 
     def install(candidate):
@@ -79,7 +81,7 @@ def test_engine_installs_best_ranked_candidate_when_installed_fleet_exhausted():
     engine = SelfHealingEngine(notify=notices.append)
     result = engine.run(
         contract,
-        [Candidate("broken", "mlx", frozenset({"reasoning"}))],
+        [Candidate("broken", "mlx", frozenset({"reasoning"}), local=True)],
         invoke=lambda model, feedback: (
             "useful coaching" if model.model == "new-best" else (_ for _ in ()).throw(TimeoutError())
         ),
@@ -109,7 +111,7 @@ def test_discovery_fails_closed_without_fit_eval_and_promotion_gates():
             [],
             invoke=lambda model, feedback: "unused",
             validate=lambda value: (True, ""),
-            discover=lambda contract: [Candidate("unguarded", "mlx")],
+            discover=lambda contract: [Candidate("unguarded", "mlx", local=True)],
             install=lambda candidate: installed.append(candidate.model) or True,
         )
     assert installed == []
@@ -118,7 +120,9 @@ def test_discovery_fails_closed_without_fit_eval_and_promotion_gates():
 @pytest.mark.parametrize("stage", ["discover", "fit", "install", "evaluate", "promote"])
 def test_recovery_adapter_exceptions_are_classified_and_notify_failure(stage):
     notices: list[dict] = []
-    candidate = Candidate("candidate", "mlx", frozenset({"reasoning"}), installed=False)
+    candidate = Candidate(
+        "candidate", "mlx", frozenset({"reasoning"}), installed=False, local=True,
+    )
 
     def boom(*_args):
         raise RuntimeError(f"{stage} exploded")
@@ -154,8 +158,8 @@ def test_capability_mismatch_is_skipped_without_invocation():
     result = engine.run(
         contract,
         [
-            Candidate("text-only", "ollama", frozenset({"text"})),
-            Candidate("vision-model", "mlx", frozenset({"vision"})),
+            Candidate("text-only", "ollama", frozenset({"text"}), local=True),
+            Candidate("vision-model", "mlx", frozenset({"vision"}), local=True),
         ],
         invoke=lambda model, feedback: called.append(model.model) or "caption",
         validate=lambda value: (True, ""),
@@ -187,8 +191,8 @@ def test_lru_prune_does_not_require_upstream_availability():
 def test_installed_candidate_order_preserves_incumbent_then_fallback_contract():
     contract = JobContract(job_id="role.order", role="reasoning")
     candidates = [
-        Candidate("fast", "mlx", discovery_score=0.7, latency_ms=100),
-        Candidate("best", "mlx", discovery_score=0.95, latency_ms=9000),
+        Candidate("fast", "mlx", discovery_score=0.7, latency_ms=100, local=True),
+        Candidate("best", "mlx", discovery_score=0.95, latency_ms=9000, local=True),
     ]
     engine = SelfHealingEngine()
     result = engine.run(
@@ -206,8 +210,8 @@ def test_never_cloud_contract_filters_remote_candidates():
     result = SelfHealingEngine().run(
         contract,
         [
-            Candidate("remote", "cloud"),
-            Candidate("local", "mlx"),
+            Candidate("remote", "cloud", local=False),
+            Candidate("local", "mlx", local=True),
         ],
         invoke=lambda model, feedback: called.append(model.model) or "ok",
         validate=lambda value: (True, ""),
@@ -250,7 +254,8 @@ def test_notification_failure_does_not_abort_successful_failover():
 
     result = SelfHealingEngine(notify=broken_notify).run(
         JobContract(job_id="notify.failsoft", role="reasoning", repair_attempts=0),
-        [Candidate("bad", "mlx"), Candidate("good", "ollama")],
+        [Candidate("bad", "mlx", local=True),
+         Candidate("good", "ollama", local=True)],
         invoke=lambda candidate, _feedback: calls.append(candidate.model) or candidate.model,
         validate=lambda value: (value == "good", "quality floor"),
     )
@@ -283,7 +288,8 @@ def test_deadline_rejects_result_that_finishes_beyond_late_window():
                 deadline_s=10,
                 bounded_late_s=5,
             ),
-            [Candidate("slow", "mlx"), Candidate("fallback", "ollama")],
+            [Candidate("slow", "mlx", local=True),
+             Candidate("fallback", "ollama", local=True)],
             invoke=invoke,
             validate=lambda value: (True, ""),
         )
@@ -305,7 +311,7 @@ def test_bounded_late_window_accepts_quality_result_within_grace():
             deadline_s=10,
             bounded_late_s=2,
         ),
-        [Candidate("quality", "mlx")],
+        [Candidate("quality", "mlx", local=True)],
         invoke=invoke,
         validate=lambda value: (True, "", 1.0),
     )
@@ -354,3 +360,28 @@ def test_lru_metadata_cannot_override_validated_model_or_size():
         "size_gb": 12.0,
         "last_used": "2024-01-01",
     }]
+
+
+def test_lru_prune_normalizes_mixed_timestamps_and_missing_is_oldest():
+    managed = {
+        "numeric": {"size_gb": 1, "last_used": 1_800_000_000},
+        "iso": {"size_gb": 1, "last_used": "2025-01-01T00:00:00+00:00"},
+        "missing": {"size_gb": 1},
+        "malformed": {"size_gb": 1, "last_used": "not-a-date"},
+    }
+    plan = lru_prune_plan(managed, protected=set(), need_gb=4)
+    assert [item["model"] for item in plan] == [
+        "malformed", "missing", "iso", "numeric",
+    ]
+
+
+def test_never_cloud_rejects_remote_endpoint_even_with_local_backend_alias():
+    called: list[str] = []
+    with pytest.raises(NoCompatibleModel):
+        SelfHealingEngine().run(
+            JobContract(job_id="private.remote-alias", role="reasoning"),
+            [Candidate("remote-ollama", "ollama", local=False)],
+            invoke=lambda model, feedback: called.append(model.model) or "ok",
+            validate=lambda value: (True, ""),
+        )
+    assert called == []

@@ -26,6 +26,7 @@ the disk check and fill the volume mid-download.
 from __future__ import annotations
 
 import math
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -412,18 +413,44 @@ def promote(
     return plan
 
 
-def rollback(role: str, registry: dict[str, Any], *, dry_run: bool = True) -> dict[str, Any]:
+def _default_installed(model: str, backend: str) -> bool:
+    if backend == "ollama":
+        from ..backends.ollama import ollama_model_present
+
+        return ollama_model_present(model)
+    if backend in {"mlx", "mlx_vlm"} and "/" in model:
+        hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        return (hf_home / "hub" / ("models--" + model.replace("/", "--"))).is_dir()
+    return False
+
+
+def rollback(
+    role: str,
+    registry: dict[str, Any],
+    *,
+    dry_run: bool = True,
+    installed: Callable[[str, str], bool] | None = None,
+) -> dict[str, Any]:
     """Restore ``role``'s most recent retained rollback as the incumbent."""
     target = (_registry.get_role(registry, role) or {}).get("rollback") or []
     if not target:
         return {"role": role, "applied": False, "reason": "no rollback retained"}
-    plan = {"role": role, "to": target[0], "applied": False}
+    target_model = target[0]
+    snapshot = ((_registry.get_role(registry, role) or {}).get("rollback_configs") or {}).get(
+        target_model
+    )
+    if not isinstance(snapshot, dict) or not snapshot.get("backend"):
+        return {"role": role, "to": target_model, "applied": False,
+                "reason": "rollback snapshot unavailable"}
+    plan = {"role": role, "to": target_model, "applied": False}
     if dry_run:
         plan["reason"] = "dry-run"
         return plan
-    restored = _registry.rollback(registry, role)
+    restored = _registry.rollback(registry, role, installed=installed or _default_installed)
     plan["to"] = restored
     plan["applied"] = restored is not None
+    if restored is None:
+        plan["reason"] = "rollback target is not verified installed"
     return plan
 
 

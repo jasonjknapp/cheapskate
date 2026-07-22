@@ -228,9 +228,24 @@ def test_promote_applies_and_retains_rollback():
     cur.promote("reasoning", "v/cand", "mlx", r, dry_run=False)
     assert r["roles"]["reasoning"]["model"] == "v/cand"
     assert r["roles"]["reasoning"]["rollback"] == ["v/inc"]
-    rb = cur.rollback("reasoning", r, dry_run=False)
+    rb = cur.rollback(
+        "reasoning", r, dry_run=False,
+        installed=lambda _model, _backend: True,
+    )
     assert rb["to"] == "v/inc"
     assert r["roles"]["reasoning"]["model"] == "v/inc"
+
+
+def test_rollback_refuses_when_installation_cannot_be_verified():
+    r = _reg()
+    cur.promote("reasoning", "v/cand", "mlx", r, dry_run=False)
+    result = cur.rollback(
+        "reasoning", r, dry_run=False,
+        installed=lambda _model, _backend: False,
+    )
+    assert result["applied"] is False
+    assert "not verified installed" in result["reason"]
+    assert r["roles"]["reasoning"]["model"] == "v/cand"
 
 
 # ── prune allowlist ──────────────────────────────────────────────────────────

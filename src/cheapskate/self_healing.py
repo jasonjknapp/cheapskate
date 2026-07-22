@@ -30,6 +30,7 @@ class Candidate:
     discovery_score: float = 0.0
     latency_ms: float | None = None
     installed: bool = True
+    local: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,10 +381,7 @@ class SelfHealingEngine:
             c for c in candidates
             if (c.installed or not require_installed)
             and contract.accepts_capabilities(c.capabilities)
-            and not (
-                contract.privacy == "never_cloud"
-                and c.backend in {"cloud", "remote"}
-            )
+            and not (contract.privacy == "never_cloud" and c.local is not True)
             and (include_blocked or not self.compatibility.is_blocked(contract.job_id, c.model))
         ]
         # Installed order is contractual: incumbent, fallback, retained rollback.
@@ -516,7 +514,25 @@ def lru_prune_plan(
         # State metadata is untrusted bookkeeping. It must not replace the map's
         # canonical model identity or the positive numeric size validated above.
         eligible.append({**meta, "model": model, "size_gb": size})
-    eligible.sort(key=lambda item: (item.get("last_used") or "", item["model"]))
+    def last_used_key(item: dict[str, Any]) -> tuple[float, str]:
+        value = item.get("last_used")
+        if isinstance(value, bool):
+            timestamp = 0.0
+        elif isinstance(value, (int, float)):
+            timestamp = float(value) if math.isfinite(float(value)) else 0.0
+        elif isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                timestamp = parsed.timestamp()
+            except (ValueError, OverflowError):
+                timestamp = 0.0
+        else:
+            timestamp = 0.0
+        return timestamp, item["model"]
+
+    eligible.sort(key=last_used_key)
     plan: list[dict[str, Any]] = []
     freed = 0.0
     for item in eligible:

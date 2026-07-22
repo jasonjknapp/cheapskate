@@ -27,8 +27,9 @@ anything.
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -36,6 +37,16 @@ from .. import paths
 
 _REGISTRY_FILE = "registry.yaml"
 KEEP_ROLLBACK_N = 1  # rollbacks retained per role
+_ROLLBACK_META_KEYS = {"rollback", "rollback_configs"}
+_MODEL_SPEC_KEYS = {"model", "backend", "endpoint", "approx_gb", "quant", "options"}
+
+
+def _role_snapshot(role_config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: deepcopy(value)
+        for key, value in role_config.items()
+        if key not in _ROLLBACK_META_KEYS
+    }
 
 
 def default_roles() -> dict[str, dict[str, Any]]:
@@ -135,6 +146,9 @@ def set_incumbent(
     roles = registry.setdefault("roles", {})
     rc = roles.setdefault(role, {})
     prev = rc.get("model")
+    previous_snapshot = _role_snapshot(rc) if prev else None
+    for key in _MODEL_SPEC_KEYS:
+        rc.pop(key, None)
     rc["model"] = model
     rc["backend"] = backend
     if endpoint is not None:
@@ -151,6 +165,10 @@ def set_incumbent(
         rollbacks = rc.setdefault("rollback", [])
         rollbacks.insert(0, prev)
         del rollbacks[keep_n:]  # bound retention
+        snapshots = rc.setdefault("rollback_configs", {})
+        snapshots[prev] = previous_snapshot
+        for stale in set(snapshots) - set(rollbacks):
+            del snapshots[stale]
     return registry
 
 
@@ -168,7 +186,12 @@ def is_quarantined(registry: dict[str, Any], role: str, model: str) -> bool:
     return bool(rc and model in (rc.get("quarantine") or []))
 
 
-def rollback(registry: dict[str, Any], role: str) -> str | None:
+def rollback(
+    registry: dict[str, Any],
+    role: str,
+    *,
+    installed: Callable[[str, str], bool] | None = None,
+) -> str | None:
     """Restore the most recent retained rollback as the incumbent. Returns the
     model restored, or None if no rollback is retained. Mutates ``registry``."""
     rc = get_role(registry, role)
@@ -177,10 +200,27 @@ def rollback(registry: dict[str, Any], role: str) -> str | None:
     rolls = rc.get("rollback") or []
     if not rolls:
         return None
-    target = rolls.pop(0)
+    target = rolls[0]
+    snapshots = rc.get("rollback_configs") or {}
+    target_snapshot = snapshots.get(target)
+    if not isinstance(target_snapshot, dict):
+        return None
+    target_backend = target_snapshot.get("backend")
+    if not target_backend or installed is None or installed(target, target_backend) is not True:
+        return None
+    rolls.pop(0)
     prev = rc.get("model")
-    rc["model"] = target
+    previous_snapshot = _role_snapshot(rc) if prev else None
+    history = list(rolls)
+    rc.clear()
+    rc.update(deepcopy(target_snapshot))
+    rc["rollback"] = history
+    rc["rollback_configs"] = snapshots
     # the deposed incumbent becomes the newest rollback so the swap is reversible
     if prev and prev != target:
-        rolls.insert(0, prev)
+        rc["rollback"].insert(0, prev)
+        snapshots[prev] = previous_snapshot
+    del rc["rollback"][KEEP_ROLLBACK_N:]
+    for stale in set(snapshots) - set(rc["rollback"]):
+        del snapshots[stale]
     return target

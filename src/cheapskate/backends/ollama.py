@@ -95,9 +95,14 @@ def ollama_model_present(model: str, runner: Optional[Callable[[], str]] = None)
     try:
         out = (runner or (lambda: subprocess.run(
             ["ollama", "list"], capture_output=True, text=True, timeout=10).stdout))()
-        base = (model or "").split(":")[0]
+        def normalize(name: str) -> str:
+            name = (name or "").strip()
+            leaf = name.rsplit("/", 1)[-1]
+            return name if ":" in leaf else f"{name}:latest"
+
+        wanted = normalize(model)
         return any(
-            base and ln.split() and ln.split()[0].split(":")[0] == base
+            wanted and ln.split() and normalize(ln.split()[0]) == wanted
             for ln in (out or "").splitlines()[1:]
         )
     except Exception:  # noqa: BLE001

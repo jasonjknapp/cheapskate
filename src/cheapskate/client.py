@@ -20,6 +20,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -282,6 +283,15 @@ def _candidate_installed(spec: Any) -> bool:
     return False
 
 
+def _endpoint_is_local(endpoint: str | None) -> bool:
+    """True only for explicit loopback HTTP endpoints; unknown fails closed."""
+    try:
+        host = urlparse(str(endpoint)).hostname
+    except ValueError:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
 def generate_json(
     prompt: str,
     *,
@@ -354,6 +364,7 @@ def generate_json(
                 spec.backend,
                 capabilities=declared,
                 installed=_candidate_installed(spec),
+                local=_endpoint_is_local(spec.endpoint),
             )
             for spec in role_candidates(role, config=config)
         ]

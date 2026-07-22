@@ -289,8 +289,20 @@ def test_lms_loaded_detects_no_models():
 
 
 def test_ollama_model_present_reads_ollama_list():
-    fake_list = "NAME\t\tID\t\tSIZE\nqwen3-coder:30b\tabc\t18 GB\n"
-    assert ollamamod.ollama_model_present("qwen3-coder", runner=lambda: fake_list) is True
+    fake_list = (
+        "NAME\t\tID\t\tSIZE\n"
+        "qwen3-coder:30b\tabc\t18 GB\n"
+        "defaulted:latest\tdef\t8 GB\n"
+    )
+    assert ollamamod.ollama_model_present(
+        "qwen3-coder:30b", runner=lambda: fake_list
+    ) is True
+    assert ollamamod.ollama_model_present(
+        "qwen3-coder", runner=lambda: fake_list
+    ) is False
+    assert ollamamod.ollama_model_present(
+        "defaulted", runner=lambda: fake_list
+    ) is True
     assert ollamamod.ollama_model_present("mistral", runner=lambda: fake_list) is False
 
 
