@@ -1,7 +1,7 @@
 <!-- PLAN-STATE v1 -->
 current_phase: release-prep
 phase_status: in_progress
-last_commit:  307b72cb10f288526789dbf35c10d48aa9ea5736
+last_commit:  f1b705a147e97fa3cb6340b2ff5ef313e02667a4
 next_action:  Complete two fresh clean adversarial passes, then open the release PR.
 -->
 
