@@ -37,6 +37,7 @@ class JobContract:
     deadline_s: float | None = None
     bounded_late_s: float = 0
     quality_floor: float = 1.0
+    privacy: str = "never_cloud"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "required_capabilities", frozenset(self.required_capabilities))
@@ -44,6 +45,8 @@ class JobContract:
             raise ValueError("repair_attempts must be >= 0")
         if not 0 <= self.quality_floor <= 1:
             raise ValueError("quality_floor must be between 0 and 1")
+        if self.privacy not in {"never_cloud", "cloud_allowed"}:
+            raise ValueError("privacy must be 'never_cloud' or 'cloud_allowed'")
 
     def accepts_capabilities(self, capabilities: Iterable[str]) -> bool:
         return self.required_capabilities.issubset(set(capabilities))

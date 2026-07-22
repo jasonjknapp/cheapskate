@@ -21,6 +21,8 @@ next_action:  Run full verification, then enter release-prep.
 
 > **User goal (2026-07-21):** "Make sure you understand the orchestrator and relevant jobs so that the end result if a well functioning system. The public cheapskate should get updated as well"
 
+> **User correction (2026-07-21):** "Requiring proof the model can be downloaded again creates a fail state where outdated models clog up the filesystem. I would not require that."
+
 ## Scope
 
 This plan covers the public Cheapskate product. The machine-specific agent-workflows implementation cites this contract and adds its scheduled-job inventory, launchd integration, daily-brief repairs, and notification delivery without duplicating the public design.
@@ -33,7 +35,7 @@ This plan covers the public Cheapskate product. The machine-specific agent-workf
 4. Discovery has no fixed model or publisher catalog. Current popularity, benchmark evidence, and release recency nominate challengers; local job-specific evaluation decides promotion.
 5. Quality dominates ranking. Latency and resource use are tie-breakers after machine fit and delivery constraints.
 6. The scheduler learns runtime, starts work earlier, and may use a bounded late-delivery window rather than silently lower quality.
-7. Incumbent, active challenger, in-use models, and one rollback per role are protected. Other managed models are removed by role-aware least-recently-used eviction after downloadability is verified.
+7. Incumbent, active challenger, in-use models, and one rollback per role are protected. Other managed models are removed by role-aware least-recently-used eviction; upstream availability is never a deletion gate.
 8. Overrides expire into a fresh selection pass; they never revert blindly to an older model. Candidate quarantines are scoped and expire.
 9. Failed recovery and rollback notify immediately. Successful installs, promotions, schedule changes, and pruning are summarized.
 10. Existing callers remain source-compatible while the global job inventory migrates.

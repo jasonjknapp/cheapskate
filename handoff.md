@@ -1,15 +1,18 @@
 # Cheapskate Handoff
 
-> **Last updated: 2026-07-22T01:21Z** (`feature/model-self-healing`, base `466bf7b`) — Global model self-healing is implemented and entering release review.
+> **Last updated: 2026-07-22T02:47Z** (`feature/model-self-healing`) — Paused during release-review remediation at Jason's request.
 
 ## 📌 Current State
 
-- The public package now exposes model-independent job contracts, compatible role fallback, job-scoped incompatibility, dynamic recency-biased discovery, and protected LRU cleanup.
-- Verification before release review: 365 tests passed; Ruff passed.
+- Baseline implementation is stored at `3f133c2`; its pre-review verification was 365 tests passed and Ruff passed.
+- Independent review then proved five release blockers: missing privacy enforcement, permanent compatibility quarantines, incomplete LRU metadata protection, discovery without mandatory fit/eval/promotion gates, and quality/latency ordering plus incomplete live integration.
+- A WIP remediation adds those guards and begins wiring persistent job compatibility into the live client/router. It is intentionally marked WIP: tests and a fresh two-clean review have not run since these edits.
+- Agent-workflows is stored separately at `2ea4716`. Its review proved additional machine-layer blockers (Owaves pre-gate, mismatched JJacked eval schema, incomplete fallback/rollback LRU protection, missing recovery/rollback notifications, and candidate-specific capability enforcement). Another live session owns that repository lock, so none of those findings were remediated in this paused turn.
+- Nothing has been pushed, opened as a PR, merged, deployed, or run live.
 
 ## ▶ Next Action
 
-Run `/release-prep` on `feature/model-self-healing`; if it passes, run `/release-prod` and verify the live checkout is `main == origin/main`.
+Resume by claiming both repositories. First finish and test the Cheapskate WIP remediation. Then remediate the stored agent-workflows findings after its other live lock clears. Restart `/release-prep` review from the beginning for both exact new HEADs; run `/release-prod` only if every gate passes.
 
 ## 📐 Standing Directives
 
@@ -22,7 +25,8 @@ Run `/release-prep` on `feature/model-self-healing`; if it passes, run `/release
 
 ## 🟢 Active Workstreams
 
-- `[cheapskate]` Model self-healing release review in progress (per D1–D6).
+- `[cheapskate]` Paused WIP remediation after a blocking release review (per D1–D6).
+- `[agent-workflows]` Paused at `2ea4716`; remediation blocked by another live repository claim.
 
 ## 🧊 Cold Archive
 

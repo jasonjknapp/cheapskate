@@ -277,6 +277,10 @@ def generate_json(
     temperature: float = 0.1,
     timeout: float = DEFAULT_TIMEOUT,
     retries: int = 2,
+    job_id: Optional[str] = None,
+    required_capabilities: Optional[set[str]] = None,
+    quality_floor: float = 1.0,
+    privacy: str = "never_cloud",
     config: Any = None,
     api: Optional[Any] = None,
 ) -> Union[dict, list]:
@@ -294,17 +298,85 @@ def generate_json(
         {"role": "system", "content": sys_msg},
         {"role": "user", "content": prompt},
     ]
-    last_err: Optional[Exception] = None
+    def parse_response(text: str) -> Union[dict, list]:
+        try:
+            if validator is not None:
+                return validator.model_validate_json(text).model_dump()
+            parsed = json.loads(text)
+            if isinstance(schema, dict):
+                _validate_raw_schema(parsed, schema)
+            elif not isinstance(parsed, dict):
+                raise ValueError(f"$ must be object, got {type(parsed).__name__}")
+            return parsed
+        except Exception as exc:
+            raise ValueError(f"schema validation failed: {exc}") from exc
+
     if role and model is None:
+        from . import paths
         from .backends.resolve import role_candidates
+        from .contracts import JobContract
+        from .self_healing import (
+            Candidate,
+            CompatibilityStore,
+            NoCompatibleModel,
+            SelfHealingEngine,
+        )
 
-        candidates: list[str | None] = [
-            spec.model for spec in role_candidates(role, config=config)
+        capabilities = frozenset(required_capabilities or {"json"})
+        contract = JobContract(
+            job_id=job_id or f"client.generate_json:{role}",
+            role=role,
+            output_mode="json",
+            required_capabilities=capabilities,
+            repair_attempts=retries,
+            quality_floor=quality_floor,
+            privacy=privacy,
+        )
+        installed = [
+            Candidate(
+                spec.model,
+                spec.backend,
+                capabilities=capabilities,
+                installed=True,
+            )
+            for spec in role_candidates(role, config=config)
         ]
-    else:
-        candidates = [model]
+        engine = SelfHealingEngine(compatibility=CompatibilityStore(
+            paths.state_dir() / "model-job-compatibility.json"
+        ))
 
-    for candidate in candidates:
+        def invoke(candidate: Candidate, feedback: str | None) -> Union[dict, list]:
+            messages = list(base_messages)
+            if feedback:
+                messages.append({
+                    "role": "user",
+                    "content": "The prior response failed validation: "
+                    f"{feedback}. Return only corrected schema-valid JSON.",
+                })
+            body = _post_chat(
+                messages,
+                model=candidate.model,
+                role=None,
+                temperature=temperature,
+                timeout=timeout,
+                response_json=True,
+                config=config,
+                api=api,
+            )
+            return parse_response(_content(body))
+
+        try:
+            return engine.run(
+                contract,
+                installed,
+                invoke=invoke,
+                validate=lambda _value: (True, "", 1.0),
+            ).output
+        except NoCompatibleModel as exc:
+            raise CheapskateUnavailable(str(exc)) from exc
+
+    last_err: Optional[Exception] = None
+    for candidate in [model]:
         messages = list(base_messages)
         for _ in range(retries + 1):
             try:
@@ -314,14 +386,7 @@ def generate_json(
                     config=config, api=api,
                 )
                 text = _content(body)
-                if validator is not None:
-                    return validator.model_validate_json(text).model_dump()
-                parsed = json.loads(text)
-                if isinstance(schema, dict):
-                    _validate_raw_schema(parsed, schema)
-                elif not isinstance(parsed, dict):
-                    raise ValueError(f"$ must be object, got {type(parsed).__name__}")
-                return parsed
+                return parse_response(text)
             except CheapskateUnavailable as exc:
                 last_err = exc
             except Exception as exc:  # noqa: BLE001 — bad JSON/schema → repair

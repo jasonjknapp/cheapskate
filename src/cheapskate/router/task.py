@@ -341,9 +341,22 @@ def _run_local(
     # after the first (attempts - 1), so a run that exhausts the budget reports
     # retries == max_retries, not max_retries + 1.
     from ..backends.resolve import role_candidates
+    from .. import paths
+    from ..contracts import FailureKind
+    from ..self_healing import CompatibilityStore
 
     attempts = 0
-    candidates = role_candidates(role, config=config)
+    compatibility = CompatibilityStore(paths.state_dir() / "model-job-compatibility.json")
+    job_id = f"router:{task_type}"
+    candidates = [
+        candidate
+        for candidate in role_candidates(role, config=config)
+        if not compatibility.is_blocked(job_id, candidate.model)
+    ]
+    if not candidates:
+        raise LocalUnavailable(
+            f"all role-compatible models are temporarily quarantined for {job_id!r}"
+        )
     feedback: str | None = None
     last_env: dict[str, Any] = {"output": None, "self_confidence": None, "criteria_met": None}
     ok = False
@@ -407,7 +420,15 @@ def _run_local(
                 )
                 break
         if ok:
+            compatibility.mark_compatible(job_id, selected_model)
             break
+        if error_kind == "verify_failed":
+            compatibility.block(
+                job_id,
+                candidate.model,
+                FailureKind.QUALITY,
+                feedback or "verification rejected every repair attempt",
+            )
 
     retries = attempts - 1
     escalated = not ok

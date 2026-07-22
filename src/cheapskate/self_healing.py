@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -42,35 +44,85 @@ class NoCompatibleModel(RuntimeError):
 
 
 class CompatibilityStore:
-    """Job-scoped model failures, optionally persisted as atomic JSON."""
+    """Expiring, job-scoped failures persisted with flocked atomic writes."""
 
-    def __init__(self, path: Path | None = None):
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        ttl_s: float = 7 * 24 * 60 * 60,
+        now: Callable[[], datetime] | None = None,
+    ):
         self.path = path
+        self.ttl_s = ttl_s
+        self._now = now or (lambda: datetime.now(timezone.utc))
         self._data: dict[str, dict[str, dict[str, Any]]] = {}
-        if path is not None:
-            try:
-                loaded = json.loads(path.read_text())
-                if isinstance(loaded, dict):
-                    self._data = loaded
-            except (OSError, ValueError):
-                pass
+        self._reload()
+
+    @contextmanager
+    def _locked(self):
+        if self.path is None:
+            yield
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with lock_path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self._reload()
+            yield
+
+    def _reload(self) -> None:
+        if self.path is None:
+            return
+        try:
+            loaded = json.loads(self.path.read_text())
+            self._data = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            self._data = {}
 
     def block(self, job_id: str, model: str, kind: FailureKind, detail: str) -> None:
-        self._data.setdefault(job_id, {})[model] = {
-            "kind": kind.value,
-            "detail": detail[:300],
-            "at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._save()
-
-    def mark_compatible(self, job_id: str, model: str) -> None:
-        models = self._data.get(job_id, {})
-        if model in models:
-            del models[model]
+        with self._locked():
+            now = self._now()
+            self._data.setdefault(job_id, {})[model] = {
+                "kind": kind.value,
+                "detail": detail[:300],
+                "at": now.isoformat(),
+                "expires_at": (now + timedelta(seconds=self.ttl_s)).isoformat(),
+            }
             self._save()
 
+    def mark_compatible(self, job_id: str, model: str) -> None:
+        with self._locked():
+            models = self._data.get(job_id, {})
+            if model in models:
+                del models[model]
+                if not models:
+                    self._data.pop(job_id, None)
+                self._save()
+
     def is_blocked(self, job_id: str, model: str) -> bool:
-        return model in self._data.get(job_id, {})
+        with self._locked():
+            entry = self._data.get(job_id, {}).get(model)
+            if not entry:
+                return False
+            expires_at = entry.get("expires_at")
+            try:
+                expires = datetime.fromisoformat(str(expires_at))
+            except (TypeError, ValueError):
+                try:
+                    blocked_at = datetime.fromisoformat(str(entry["at"]))
+                    expires = blocked_at + timedelta(seconds=self.ttl_s)
+                except (KeyError, TypeError, ValueError):
+                    expires = self._now()
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires > self._now():
+                return True
+            del self._data[job_id][model]
+            if not self._data[job_id]:
+                del self._data[job_id]
+            self._save()
+            return False
 
     def _save(self) -> None:
         if self.path is None:
@@ -83,7 +135,10 @@ class CompatibilityStore:
 
 NotifyFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[Candidate, str | None], Any]
-ValidateFn = Callable[[Any], tuple[bool, str]]
+ValidateFn = Callable[[Any], tuple[bool, str] | tuple[bool, str, float]]
+FitFn = Callable[[Candidate, JobContract], tuple[bool, str]]
+EvaluateFn = Callable[[Candidate, JobContract], tuple[bool, str, float]]
+PromoteFn = Callable[[Candidate, JobContract], bool]
 
 
 class SelfHealingEngine:
@@ -105,10 +160,13 @@ class SelfHealingEngine:
         validate: ValidateFn,
         discover: Callable[[JobContract], Iterable[Candidate]] | None = None,
         install: Callable[[Candidate], bool] | None = None,
+        fit: FitFn | None = None,
+        evaluate: EvaluateFn | None = None,
+        promote: PromoteFn | None = None,
     ) -> RunResult:
         attempts = 0
         failures: list[dict[str, str]] = []
-        candidates = self._eligible(contract, installed)
+        candidates = self._eligible(contract, installed, require_installed=True)
         result, attempts = self._try_candidates(
             contract, candidates, invoke, validate, attempts, failures
         )
@@ -116,9 +174,31 @@ class SelfHealingEngine:
             return result
 
         if discover is not None and install is not None:
-            discovered = self._eligible(contract, discover(contract), include_blocked=False)
+            if fit is None or evaluate is None or promote is None:
+                failures.append({
+                    "model": "discovery",
+                    "kind": FailureKind.SAFETY.value,
+                    "detail": "discovery requires fit, eval/canary, and promotion gates",
+                })
+                discovered = []
+            else:
+                discovered = self._eligible(
+                    contract,
+                    discover(contract),
+                    include_blocked=False,
+                    require_installed=False,
+                    rank_discovery=True,
+                )
             for candidate in discovered:
                 if candidate.model in {c.model for c in candidates}:
+                    continue
+                fits, fit_detail = fit(candidate, contract)
+                if not fits:
+                    failures.append({
+                        "model": candidate.model,
+                        "kind": FailureKind.INCOMPATIBLE.value,
+                        "detail": f"fit gate: {fit_detail}"[:300],
+                    })
                     continue
                 if not install(candidate):
                     failures.append({"model": candidate.model, "kind": "install_failed"})
@@ -128,6 +208,36 @@ class SelfHealingEngine:
                     "job_id": contract.job_id,
                     "model": candidate.model,
                     "backend": candidate.backend,
+                })
+                eval_ok, eval_detail, quality = evaluate(candidate, contract)
+                if not eval_ok or quality < contract.quality_floor:
+                    detail = (
+                        eval_detail
+                        if not eval_ok
+                        else f"quality score {quality:.3f} below floor {contract.quality_floor:.3f}"
+                    )
+                    self.compatibility.block(
+                        contract.job_id, candidate.model, FailureKind.QUALITY, detail
+                    )
+                    failures.append({
+                        "model": candidate.model,
+                        "kind": FailureKind.QUALITY.value,
+                        "detail": detail[:300],
+                    })
+                    continue
+                if not promote(candidate, contract):
+                    failures.append({
+                        "model": candidate.model,
+                        "kind": FailureKind.SAFETY.value,
+                        "detail": "promotion gate refused candidate",
+                    })
+                    continue
+                self.notify({
+                    "event": "model_promoted",
+                    "job_id": contract.job_id,
+                    "model": candidate.model,
+                    "backend": candidate.backend,
+                    "quality": quality,
                 })
                 result, attempts = self._try_candidates(
                     contract, [candidate], invoke, validate, attempts, failures
@@ -152,18 +262,25 @@ class SelfHealingEngine:
         candidates: Iterable[Candidate],
         *,
         include_blocked: bool = False,
+        require_installed: bool = True,
+        rank_discovery: bool = False,
     ) -> list[Candidate]:
         eligible = [
             c for c in candidates
-            if contract.accepts_capabilities(c.capabilities)
+            if (c.installed or not require_installed)
+            and contract.accepts_capabilities(c.capabilities)
+            and not (
+                contract.privacy == "never_cloud"
+                and c.backend in {"cloud", "remote"}
+            )
             and (include_blocked or not self.compatibility.is_blocked(contract.job_id, c.model))
         ]
-        # Quality/discovery rank is primary. Latency only breaks an equal-quality tie.
-        return sorted(
-            eligible,
-            key=lambda c: (c.discovery_score, -(c.latency_ms or 0)),
-            reverse=True,
-        )
+        # Installed order is contractual: incumbent, fallback, retained rollback.
+        # Discovery metadata only orders which challengers reach the local eval
+        # gate first; latency never displaces a proven incumbent.
+        if not rank_discovery:
+            return eligible
+        return sorted(eligible, key=lambda c: c.discovery_score, reverse=True)
 
     def _try_candidates(
         self,
@@ -184,8 +301,10 @@ class SelfHealingEngine:
                 attempts += 1
                 try:
                     output = invoke(candidate, feedback)
-                    valid, detail = validate(output)
-                    if valid:
+                    assessment = validate(output)
+                    valid, detail = assessment[:2]
+                    quality = assessment[2] if len(assessment) > 2 else (1.0 if valid else 0.0)
+                    if valid and quality >= contract.quality_floor:
                         self.compatibility.mark_compatible(contract.job_id, candidate.model)
                         recovered = attempts > 1 or candidate.model != first_model
                         if recovered:
@@ -203,6 +322,12 @@ class SelfHealingEngine:
                             attempts=attempts,
                             recovered=recovered,
                         ), attempts
+                    if valid:
+                        detail = (
+                            f"quality score {quality:.3f} below floor "
+                            f"{contract.quality_floor:.3f}"
+                        )
+                        valid = False
                     final_kind = classify_failure(detail)
                     if final_kind is FailureKind.UNKNOWN:
                         final_kind = (
@@ -249,6 +374,17 @@ def lru_prune_plan(
     eligible = []
     for model, meta in managed.items():
         if model in protected or meta.get("prune") == "never":
+            continue
+        if any(meta.get(flag) for flag in (
+            "loaded",
+            "in_use",
+            "shared",
+            "pinned",
+            "active_challenger",
+            "incumbent",
+            "fallback",
+            "rollback",
+        )):
             continue
         size = float(meta.get("size_gb") or meta.get("approx_gb") or 0)
         if size <= 0:
