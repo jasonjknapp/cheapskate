@@ -19,6 +19,14 @@ MLX_HOST = "127.0.0.1"
 MLX_PORT = 8080
 MLX_VLM_PORT = 8081
 
+DEFAULT_ROLE_CAPABILITIES = {
+    "reasoning": frozenset({"text", "reasoning", "json", "coach", "long-context"}),
+    "code": frozenset({"text", "code", "json"}),
+    "classification": frozenset({"text", "classification", "json"}),
+    "creative": frozenset({"text", "creative"}),
+    "vision": frozenset({"vision", "json"}),
+}
+
 
 class LocalUnavailable(Exception):
     """A local backend could not serve the request (down/missing/over-budget).
@@ -246,6 +254,17 @@ def role_candidates(role: str, *, config: Any = None) -> list[BackendSpec]:
             role=role,
         ))
     return out
+
+
+def role_capabilities(role: str, *, config: Any = None) -> frozenset[str]:
+    """Capabilities declared by role policy, never inferred from a caller request."""
+    entry = _roles(config).get(role) or {}
+    declared = _get(entry, "capabilities")
+    if declared is None:
+        return DEFAULT_ROLE_CAPABILITIES.get(role, frozenset())
+    if not isinstance(declared, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(item) for item in declared if item)
 
 
 def port_of(spec: BackendSpec, default: int = MLX_PORT) -> int:

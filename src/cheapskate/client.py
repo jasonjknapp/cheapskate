@@ -270,6 +270,18 @@ def _validate_raw_schema(value: Any, schema: dict, path: str = "$") -> Any:
     return value
 
 
+def _candidate_installed(spec: Any) -> bool:
+    """Probe actual local installation state without downloading anything."""
+    if spec.backend == "ollama":
+        from .backends.ollama import ollama_model_present
+        return ollama_model_present(spec.model)
+    if spec.backend in {"mlx", "mlx_vlm"} and "/" in spec.model:
+        hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        dirname = "models--" + spec.model.replace("/", "--")
+        return (hf_home / "hub" / dirname).is_dir()
+    return False
+
+
 def generate_json(
     prompt: str,
     *,
@@ -316,7 +328,7 @@ def generate_json(
 
     if role and model is None:
         from . import paths
-        from .backends.resolve import role_candidates
+        from .backends.resolve import role_candidates, role_capabilities
         from .contracts import JobContract
         from .self_healing import (
             Candidate,
@@ -325,12 +337,13 @@ def generate_json(
             SelfHealingEngine,
         )
 
-        capabilities = frozenset(required_capabilities or {"json"})
+        required = frozenset(required_capabilities or {"json"})
+        declared = role_capabilities(role, config=config)
         contract = JobContract(
             job_id=job_id or f"client.generate_json:{role}",
             role=role,
             output_mode="json",
-            required_capabilities=capabilities,
+            required_capabilities=required,
             repair_attempts=retries,
             quality_floor=quality_floor,
             privacy=privacy,
@@ -339,8 +352,8 @@ def generate_json(
             Candidate(
                 spec.model,
                 spec.backend,
-                capabilities=capabilities,
-                installed=True,
+                capabilities=declared,
+                installed=_candidate_installed(spec),
             )
             for spec in role_candidates(role, config=config)
         ]

@@ -115,6 +115,34 @@ def test_discovery_fails_closed_without_fit_eval_and_promotion_gates():
     assert installed == []
 
 
+@pytest.mark.parametrize("stage", ["discover", "fit", "install", "evaluate", "promote"])
+def test_recovery_adapter_exceptions_are_classified_and_notify_failure(stage):
+    notices: list[dict] = []
+    candidate = Candidate("candidate", "mlx", frozenset({"reasoning"}), installed=False)
+
+    def boom(*_args):
+        raise RuntimeError(f"{stage} exploded")
+
+    kwargs = {
+        "discover": (boom if stage == "discover" else lambda _contract: [candidate]),
+        "fit": (boom if stage == "fit" else lambda _candidate, _contract: (True, "fits")),
+        "install": (boom if stage == "install" else lambda _candidate: True),
+        "evaluate": (boom if stage == "evaluate"
+                     else lambda _candidate, _contract: (True, "passed", 1.0)),
+        "promote": (boom if stage == "promote" else lambda _candidate, _contract: True),
+    }
+    with pytest.raises(NoCompatibleModel) as exc_info:
+        SelfHealingEngine(notify=notices.append).run(
+            JobContract(job_id=f"adapter.{stage}", role="reasoning",
+                        required_capabilities={"reasoning"}, repair_attempts=0),
+            [], invoke=lambda _candidate, _feedback: "unused",
+            validate=lambda _value: (True, ""), **kwargs,
+        )
+
+    assert f"{stage} adapter failed" in str(exc_info.value)
+    assert notices[-1]["event"] == "model_recovery_failed"
+
+
 def test_capability_mismatch_is_skipped_without_invocation():
     called: list[str] = []
     contract = JobContract(

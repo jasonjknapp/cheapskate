@@ -224,7 +224,7 @@ def test_generate_json_transport_error_degrades(registered_key):
         client.generate_json("q", model="m", api=Boom())
 
 
-def test_generate_json_repairs_then_switches_role_fallback(registered_key):
+def test_generate_json_repairs_then_switches_role_fallback(registered_key, monkeypatch):
     cfg = {"roles": {"classification": {
         "model": "org/incumbent",
         "backend": "mlx",
@@ -244,6 +244,8 @@ def test_generate_json_repairs_then_switches_role_fallback(registered_key):
                 raise ValueError("root must be an object")
             return SimpleNamespace(model_dump=lambda: value)
 
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+
     out = client.generate_json(
         "q", schema=Digest, role="classification", config=cfg, api=api, retries=1
     )
@@ -251,3 +253,38 @@ def test_generate_json_repairs_then_switches_role_fallback(registered_key):
     assert [req["json"]["model"] for req in api.requests] == [
         "org/incumbent", "org/incumbent", "fallback:latest",
     ]
+
+
+def test_generate_json_rejects_undeclared_requested_capability(registered_key, monkeypatch):
+    cfg = {"roles": {"classification": {
+        "model": "text-only:latest", "backend": "ollama",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}'))])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json(
+            "q", role="classification", config=cfg, api=api,
+            required_capabilities={"vision", "json"}, retries=0,
+        )
+    assert api.requests == []
+
+
+def test_generate_json_skips_uninstalled_incumbent(registered_key, monkeypatch):
+    cfg = {"roles": {"classification": {
+        "model": "missing:latest", "backend": "ollama",
+        "fallback": "present:latest",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}', model="present:latest"))])
+    monkeypatch.setattr(
+        client, "_candidate_installed", lambda spec: spec.model == "present:latest"
+    )
+
+    out = client.generate_json(
+        "q", role="classification", config=cfg, api=api,
+        required_capabilities={"classification", "json"}, retries=0,
+    )
+    assert out == {"ok": True}
+    assert [request["json"]["model"] for request in api.requests] == ["present:latest"]

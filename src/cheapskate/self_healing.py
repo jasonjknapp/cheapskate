@@ -204,6 +204,17 @@ class SelfHealingEngine:
             })
         return True
 
+    @staticmethod
+    def _adapter_failure(
+        failures: list[dict[str, str]], model: str, stage: str, exc: BaseException
+    ) -> None:
+        kind = classify_failure(exc)
+        failures.append({
+            "model": model,
+            "kind": kind.value,
+            "detail": f"{stage} adapter failed: {type(exc).__name__}: {exc}"[:300],
+        })
+
     def run(
         self,
         contract: JobContract,
@@ -240,7 +251,11 @@ class SelfHealingEngine:
                 })
                 discovered = []
             else:
-                discovered_raw = discover(contract)
+                try:
+                    discovered_raw = discover(contract)
+                except Exception as exc:  # noqa: BLE001 - isolate optional adapters
+                    self._adapter_failure(failures, "discovery", "discover", exc)
+                    discovered_raw = []
                 if self._deadline_exhausted(contract, started_at, failures, "discovery"):
                     discovered = []
                 else:
@@ -258,7 +273,11 @@ class SelfHealingEngine:
                     contract, started_at, failures, candidate.model
                 ):
                     break
-                fits, fit_detail = fit(candidate, contract)
+                try:
+                    fits, fit_detail = fit(candidate, contract)
+                except Exception as exc:  # noqa: BLE001
+                    self._adapter_failure(failures, candidate.model, "fit", exc)
+                    continue
                 if self._deadline_exhausted(
                     contract, started_at, failures, candidate.model
                 ):
@@ -270,7 +289,12 @@ class SelfHealingEngine:
                         "detail": f"fit gate: {fit_detail}"[:300],
                     })
                     continue
-                if not install(candidate):
+                try:
+                    installed_ok = install(candidate)
+                except Exception as exc:  # noqa: BLE001
+                    self._adapter_failure(failures, candidate.model, "install", exc)
+                    continue
+                if not installed_ok:
                     failures.append({"model": candidate.model, "kind": "install_failed"})
                     continue
                 self._notify({
@@ -283,7 +307,11 @@ class SelfHealingEngine:
                     contract, started_at, failures, candidate.model
                 ):
                     break
-                eval_ok, eval_detail, quality = evaluate(candidate, contract)
+                try:
+                    eval_ok, eval_detail, quality = evaluate(candidate, contract)
+                except Exception as exc:  # noqa: BLE001
+                    self._adapter_failure(failures, candidate.model, "evaluate", exc)
+                    continue
                 if self._deadline_exhausted(
                     contract, started_at, failures, candidate.model
                 ):
@@ -303,7 +331,12 @@ class SelfHealingEngine:
                         "detail": detail[:300],
                     })
                     continue
-                if not promote(candidate, contract):
+                try:
+                    promoted = promote(candidate, contract)
+                except Exception as exc:  # noqa: BLE001
+                    self._adapter_failure(failures, candidate.model, "promote", exc)
+                    continue
+                if not promoted:
                     failures.append({
                         "model": candidate.model,
                         "kind": FailureKind.SAFETY.value,
