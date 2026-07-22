@@ -1,18 +1,17 @@
 # Cheapskate Handoff
 
-> **Last updated: 2026-07-22T02:47Z** (`feature/model-self-healing`) — Paused during release-review remediation at Jason's request.
+> **Last updated: 2026-07-22** (`feature/model-self-healing`) — implementation and deterministic verification complete; `/release-prep` adversarial review is running.
 
 ## 📌 Current State
 
-- Baseline implementation is stored at `3f133c2`; its pre-review verification was 365 tests passed and Ruff passed.
-- Independent review then proved five release blockers: missing privacy enforcement, permanent compatibility quarantines, incomplete LRU metadata protection, discovery without mandatory fit/eval/promotion gates, and quality/latency ordering plus incomplete live integration.
-- A WIP remediation adds those guards and begins wiring persistent job compatibility into the live client/router. It is intentionally marked WIP: tests and a fresh two-clean review have not run since these edits.
-- Agent-workflows is stored separately at `2ea4716`. Its review proved additional machine-layer blockers (Owaves pre-gate, mismatched JJacked eval schema, incomplete fallback/rollback LRU protection, missing recovery/rollback notifications, and candidate-specific capability enforcement). Another live session owns that repository lock, so none of those findings were remediated in this paused turn.
-- Nothing has been pushed, opened as a PR, merged, deployed, or run live.
+- Public self-healing primitives are complete through `1e08d5c`: semantic job contracts, bounded repair, installed same-role failover, expiring job/model incompatibility, privacy enforcement, guarded discovery/install/eval/promotion, quality-first ranking, fail-soft notification receipts, monotonic deadline admission, and protected source-independent LRU planning.
+- The public API remains source-compatible. A malformed HTTP 200 completion now changes candidates instead of escaping failover; dynamic discovery cannot serve until fit, eval, quality-floor, and promotion gates pass.
+- Verification is green: 378 tests, Ruff, diff hygiene, and the required local code-model review. A fresh two-clean adversarial release gate is in progress on exact SHA `ab9baac035933fae9a2029e81c89a7aab426050d`.
+- Machine-specific implementation lives in the paired agent-workflows release; Atlas/public-article hardening lives in the paired jknapp.com release. Nothing has been pushed, merged, deployed, or run live yet.
 
 ## ▶ Next Action
 
-Resume by claiming both repositories. First finish and test the Cheapskate WIP remediation. Then remediate the stored agent-workflows findings after its other live lock clears. Restart `/release-prep` review from the beginning for both exact new HEADs; run `/release-prod` only if every gate passes.
+Complete two fresh clean adversarial passes, open the PR, rerun the exact-PR-SHA gate, then execute `/release-prod` under Jason's explicit authorization if every gate remains green.
 
 ## 📐 Standing Directives
 
@@ -25,8 +24,9 @@ Resume by claiming both repositories. First finish and test the Cheapskate WIP r
 
 ## 🟢 Active Workstreams
 
-- `[cheapskate]` Paused WIP remediation after a blocking release review (per D1–D6).
-- `[agent-workflows]` Paused at `2ea4716`; remediation blocked by another live repository claim.
+- `[cheapskate]` Release-prep gate in progress on the verified feature branch.
+- `[agent-workflows]` Paired global runtime/callsite release in progress independently.
+- `[jknapp.com]` Paired public article + autonomous Atlas recovery release in progress independently.
 
 ## 🧊 Cold Archive
 
