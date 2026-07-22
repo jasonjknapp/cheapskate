@@ -153,6 +153,28 @@ def test_complete_never_falls_back_to_cloud(registered_key):
     assert len(api.requests) == 1  # exactly one attempt, no second (cloud) path
 
 
+@pytest.mark.parametrize(
+    ("config", "routing"),
+    [
+        (None, {"model": "local:latest"}),
+        ({"roles": {"reasoning": {
+            "model": "remote-model", "backend": "ollama",
+            "endpoint": "https://models.example.com/v1",
+        }}}, {"role": "reasoning"}),
+    ],
+)
+def test_complete_never_cloud_rejects_remote_route_before_http(
+    registered_key, monkeypatch, config, routing
+):
+    if config is None:
+        monkeypatch.setenv("CHEAPSKATE_BROKER_URL", "https://remote.example.com")
+    api = FakeClient([FakeResponse(200, _chat_body("private"))])
+
+    with pytest.raises(client.CheapskateUnavailable, match="verified local backend"):
+        client.complete("private", config=config, api=api, **routing)
+    assert api.requests == []
+
+
 def test_api_key_from_env_wins(monkeypatch):
     monkeypatch.setenv("CHEAPSKATE_API_KEY", "sk-env-override")
     api = FakeClient([FakeResponse(200, _chat_body("ok"))])
@@ -322,5 +344,27 @@ def test_generate_json_never_cloud_rejects_remote_broker_before_http(
     with pytest.raises(client.CheapskateUnavailable, match="loopback broker"):
         client.generate_json(
             "private", api=api, privacy="never_cloud", retries=0, **routing,
+        )
+    assert api.requests == []
+
+
+@pytest.mark.parametrize("backend", ["cloud", "remote"])
+@pytest.mark.parametrize("routing", [{"role": "classification"}, {"model": "gateway-model"}])
+def test_generate_json_never_cloud_rejects_nonlocal_backend_on_loopback(
+    registered_key, monkeypatch, backend, routing
+):
+    cfg = {"roles": {"classification": {
+        "model": "gateway-model",
+        "backend": backend,
+        "endpoint": "http://127.0.0.1:4000/v1",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}'))])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+
+    with pytest.raises(client.CheapskateUnavailable, match="verified local backend"):
+        client.generate_json(
+            "private", config=cfg, api=api, privacy="never_cloud", retries=0,
+            **routing,
         )
     assert api.requests == []

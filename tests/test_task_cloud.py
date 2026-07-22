@@ -74,6 +74,35 @@ def test_never_cloud_forced_local_runs_local(events):
     assert res["output"] == "kept local"
 
 
+def test_never_cloud_default_client_rejects_remote_broker_before_http(
+    events, monkeypatch
+):
+    from cheapskate import client
+
+    cfg = Config(
+        never_cloud=["secrets"],
+        task_types={"secrets": {"role": "reasoning", "min_level": 1, "tier": "safe"}},
+        roles={"reasoning": {
+            "model": "local:latest", "backend": "ollama",
+            "capabilities": ["text", "reasoning", "json"],
+        }},
+    )
+    monkeypatch.setenv("CHEAPSKATE_BROKER_URL", "https://remote.example.com")
+    post_calls = []
+    monkeypatch.setattr(
+        client, "_post_chat", lambda *a, **k: post_calls.append(1) or {},
+    )
+
+    result = task.run(
+        "secrets", "c", "private", cfg, dial=(2, "std"), max_retries=0,
+    )
+    assert result["ok"] is False
+    assert result["escalated"] is True
+    assert result["output"] is None
+    assert result["error_kind"] == "CheapskateUnavailable"
+    assert post_calls == []
+
+
 # ── FAIL CLOSED: cloud route, no enabled provider ────────────────────────────
 
 

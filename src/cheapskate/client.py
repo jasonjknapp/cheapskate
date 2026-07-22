@@ -164,6 +164,7 @@ def complete(
     role: Optional[str] = None,
     temperature: float = 0.2,
     timeout: float = DEFAULT_TIMEOUT,
+    privacy: str = "never_cloud",
     config: Any = None,
     api: Optional[Any] = None,
 ) -> dict:
@@ -190,6 +191,14 @@ def complete(
     text = None
     last_error = None
     for candidate_model, candidate_role in candidates:
+        if privacy == "never_cloud" and not _never_cloud_route_is_local(
+            model=candidate_model, role=candidate_role, config=config,
+        ):
+            last_error = CheapskateUnavailable(
+                "never_cloud requires a verified local backend with loopback "
+                "broker and serving endpoints"
+            )
+            continue
         try:
             candidate_body = _post_chat(
                 messages, model=candidate_model, role=candidate_role,
@@ -292,8 +301,11 @@ def _endpoint_is_local(endpoint: str | None) -> bool:
     return host in {"localhost", "127.0.0.1", "::1"}
 
 
+_LOCAL_SERVING_BACKENDS = frozenset({"ollama", "mlx", "mlx_vlm", "lmstudio"})
+
+
 def _never_cloud_route_is_local(*, model: str | None, role: str | None, config: Any) -> bool:
-    """Prove both the broker hop and the resolved serving hop stay on loopback."""
+    """Prove the broker and a known-local serving backend stay on loopback."""
     if not _endpoint_is_local(_broker_base(config)):
         return False
     try:
@@ -302,7 +314,10 @@ def _never_cloud_route_is_local(*, model: str | None, role: str | None, config: 
         spec = resolve(role=role if model is None else None, model=model, config=config)
     except Exception:  # noqa: BLE001 - unknown provenance fails closed
         return False
-    return _endpoint_is_local(spec.endpoint)
+    return (
+        spec.backend in _LOCAL_SERVING_BACKENDS
+        and _endpoint_is_local(spec.endpoint)
+    )
 
 
 def generate_json(
@@ -334,7 +349,8 @@ def generate_json(
         model=model, role=role, config=config,
     ):
         raise CheapskateUnavailable(
-            "never_cloud requires a verified loopback broker and serving endpoint"
+            "never_cloud requires a verified local backend with loopback broker "
+            "and serving endpoints"
         )
     validator = _schema_format(schema)
     sys_msg = ((system or "") + "\nReturn ONLY valid JSON matching the required schema.").strip()

@@ -7,6 +7,8 @@
 - Incompatibility is scoped to the job and model; the same model remains eligible for other jobs.
 - A `never_cloud` job requires positively local endpoint provenance; a remote URL remains rejected even when its backend label says Ollama or MLX.
 - A `never_cloud` job also requires a loopback broker URL for role and explicit-model calls; a remote broker is rejected before any HTTP request.
+- A `never_cloud` route requires a positively local backend kind as well as loopback URLs; `cloud` and `remote` backends remain rejected behind a local gateway.
+- Unstructured `complete()` calls and the router's production default completion path enforce the same fail-closed `never_cloud` proof before HTTP.
 - If installed candidates are exhausted, the engine installs and tries the highest-ranked compatible discovery candidate.
 - Discovery is global rather than publisher-allowlisted, with strong release-recency weighting.
 - Promotion remains eval-gated; discovery popularity never overrides a failed local quality floor.
