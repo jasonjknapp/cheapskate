@@ -4,9 +4,9 @@
 
 ## 📌 Current State
 
-- Public self-healing primitives and adversarial-review remediations are complete through `f1b705a`: semantic job contracts, bounded repair, verified-installed same-role failover, declared capability enforcement, expiring job/model incompatibility, end-to-end never-cloud locality for structured and text paths, guarded discovery/install/eval/promotion, quality-first ranking, adapter-isolated notification receipts, monotonic deadline admission, and protected source-independent LRU planning.
+- Public self-healing primitives and adversarial-review remediations are complete through `15661fa`: semantic job contracts, bounded repair, exact-route same-role failover, declared capability enforcement, expiring job/model incompatibility, end-to-end never-cloud locality for structured and text paths, exact Ollama tag/capacity checks, guarded discovery/install/eval/promotion, quality-first ranking, adapter-isolated notification receipts, monotonic deadline admission, and protected source-independent LRU planning.
 - The public API remains source-compatible. A malformed HTTP 200 completion now changes candidates instead of escaping failover; dynamic discovery cannot serve until fit, eval, quality-floor, and promotion gates pass.
-- Verification is green: 400 tests, Ruff, diff hygiene, and the required local code-model review. The prior adversarial findings were remediated and the two-clean counter has restarted from zero on this checkpoint.
+- Verification is green: 403 tests, Ruff, diff hygiene, and the required local code-model review. The prior adversarial findings were remediated and the two-clean counter has restarted from zero on this checkpoint.
 - Machine-specific implementation lives in the paired agent-workflows release; Atlas/public-article hardening lives in the paired jknapp.com release. Nothing has been pushed, merged, deployed, or run live yet.
 
 ## ▶ Next Action
