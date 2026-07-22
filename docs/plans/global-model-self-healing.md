@@ -1,8 +1,8 @@
 <!-- PLAN-STATE v1 -->
-current_phase: verification
+current_phase: release-prep
 phase_status: in_progress
-last_commit:  466bf7b7ece6e4a200defcdb1a308ca08da28a12
-next_action:  Run full verification, then enter release-prep.
+last_commit:  1e08d5cbd01fda9cb73e7fdc323d98581dc8619a
+next_action:  Complete two fresh clean adversarial passes, then open the release PR.
 -->
 
 # Global Model Self-Healing
