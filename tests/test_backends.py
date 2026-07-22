@@ -78,6 +78,22 @@ def test_role_candidates_are_incumbent_fallback_rollback_and_skip_quarantine():
     assert [spec.backend for spec in candidates] == ["mlx", "ollama", "mlx"]
 
 
+def test_role_fallback_uses_broker_exact_model_route_metadata():
+    cfg = {"roles": {
+        "classification": {
+            "model": "local:latest", "backend": "ollama",
+            "fallback": "shared-model",
+        },
+        "remote-role": {
+            "model": "shared-model", "backend": "remote",
+            "endpoint": "https://models.example.com/v1",
+        },
+    }}
+    fallback = role_candidates("classification", config=cfg)[1]
+    assert fallback.backend == "remote"
+    assert fallback.endpoint == "https://models.example.com/v1"
+
+
 def test_resolve_config_backend_endpoint_override():
     # A non-localhost URL in config.backends IS the multi-machine story.
     cfg = {"roles": {}, "backends": {"ollama": "http://10.0.0.9:11434"}}
@@ -277,10 +293,33 @@ def test_ollama_resident_gb_parses_sizes():
     assert round(total, 2) == round(12 + 512 / 1024, 2)
 
 
-def test_ollama_model_resident_matches_base_name():
-    fake_ps = "NAME SIZE\nllama3:70b 40 GB\n"
-    assert ollamamod.ollama_model_resident("llama3", runner=lambda: fake_ps) is True
+def test_ollama_model_resident_matches_exact_normalized_tag():
+    fake_ps = "NAME SIZE\nllama3:70b 40 GB\ndefaulted:latest 8 GB\n"
+    assert ollamamod.ollama_model_resident("llama3:70b", runner=lambda: fake_ps) is True
+    assert ollamamod.ollama_model_resident("llama3:8b", runner=lambda: fake_ps) is False
+    assert ollamamod.ollama_model_resident("defaulted", runner=lambda: fake_ps) is True
+    assert ollamamod.ollama_model_resident("llama3", runner=lambda: fake_ps) is False
     assert ollamamod.ollama_model_resident("mistral", runner=lambda: fake_ps) is False
+
+
+def test_oversized_sibling_tag_cannot_bypass_broker_capacity(monkeypatch):
+    from cheapskate.broker import app as broker_app
+
+    fake_ps = "NAME SIZE\nqwen3:8b 5 GB\n"
+    monkeypatch.setattr(broker_app, "lms_loaded", lambda: False)
+    monkeypatch.setattr(broker_app, "ollama_resident_gb", lambda: 5.0)
+    monkeypatch.setattr(
+        broker_app,
+        "ollama_model_resident",
+        lambda model: ollamamod.ollama_model_resident(model, runner=lambda: fake_ps),
+    )
+    spec = BackendSpec(
+        model="qwen3:30b", backend="ollama",
+        endpoint="http://127.0.0.1:11434", approx_gb=120.0,
+    )
+
+    with pytest.raises(RuntimeError, match="503"):
+        broker_app.enforce_capacity(spec, budget_gb=100.0)
 
 
 def test_lms_loaded_detects_no_models():

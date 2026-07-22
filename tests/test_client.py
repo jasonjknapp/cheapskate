@@ -368,3 +368,32 @@ def test_generate_json_never_cloud_rejects_nonlocal_backend_on_loopback(
             **routing,
         )
     assert api.requests == []
+
+
+def test_generate_json_never_cloud_rejects_ambiguous_remote_fallback(
+    registered_key, monkeypatch
+):
+    cfg = {"roles": {
+        "classification": {
+            "model": "missing-local:latest", "backend": "ollama",
+            "fallback": "shared-model",
+            "capabilities": ["text", "classification", "json"],
+        },
+        "remote-role": {
+            "model": "shared-model", "backend": "remote",
+            "endpoint": "https://models.example.com/v1",
+        },
+    }}
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}'))])
+    monkeypatch.setattr(
+        client, "_candidate_installed",
+        lambda spec: spec.model == "shared-model",
+    )
+
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json(
+            "private", role="classification", config=cfg, api=api,
+            required_capabilities={"classification", "json"}, retries=0,
+            privacy="never_cloud",
+        )
+    assert api.requests == []

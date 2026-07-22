@@ -246,13 +246,10 @@ def role_candidates(role: str, *, config: Any = None) -> list[BackendSpec]:
         if model == incumbent:
             out.append(resolve(role=role, config=config))
             continue
-        backend = infer_backend(model)
-        out.append(BackendSpec(
-            model=model,
-            backend=backend,
-            endpoint=default_endpoint(backend, config),
-            role=role,
-        ))
+        # Match the broker's explicit-model resolution exactly. A fallback name
+        # may be registered by another role with remote/cloud metadata; inferring
+        # it locally here would split the privacy decision from the actual route.
+        out.append(resolve(model=model, config=config))
     return out
 
 

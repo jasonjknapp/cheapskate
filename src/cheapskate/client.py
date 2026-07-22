@@ -304,6 +304,13 @@ def _endpoint_is_local(endpoint: str | None) -> bool:
 _LOCAL_SERVING_BACKENDS = frozenset({"ollama", "mlx", "mlx_vlm", "lmstudio"})
 
 
+def _serving_spec_is_local(spec: Any) -> bool:
+    return (
+        spec.backend in _LOCAL_SERVING_BACKENDS
+        and _endpoint_is_local(spec.endpoint)
+    )
+
+
 def _never_cloud_route_is_local(*, model: str | None, role: str | None, config: Any) -> bool:
     """Prove the broker and a known-local serving backend stay on loopback."""
     if not _endpoint_is_local(_broker_base(config)):
@@ -314,10 +321,7 @@ def _never_cloud_route_is_local(*, model: str | None, role: str | None, config: 
         spec = resolve(role=role if model is None else None, model=model, config=config)
     except Exception:  # noqa: BLE001 - unknown provenance fails closed
         return False
-    return (
-        spec.backend in _LOCAL_SERVING_BACKENDS
-        and _endpoint_is_local(spec.endpoint)
-    )
+    return _serving_spec_is_local(spec)
 
 
 def generate_json(
@@ -399,7 +403,7 @@ def generate_json(
                 spec.backend,
                 capabilities=declared,
                 installed=_candidate_installed(spec),
-                local=_endpoint_is_local(spec.endpoint),
+                local=_serving_spec_is_local(spec),
             )
             for spec in role_candidates(role, config=config)
         ]
@@ -408,6 +412,12 @@ def generate_json(
         ))
 
         def invoke(candidate: Candidate, feedback: str | None) -> Union[dict, list]:
+            if privacy == "never_cloud" and not _never_cloud_route_is_local(
+                model=candidate.model, role=None, config=config,
+            ):
+                raise CheapskateUnavailable(
+                    "never_cloud candidate route changed or is not verified local"
+                )
             messages = list(base_messages)
             if feedback:
                 messages.append({
