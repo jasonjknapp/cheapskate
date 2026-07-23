@@ -218,6 +218,11 @@ class RoleEntry(BaseModel):
     fallback: str | None = None
     rollback: list[str] = Field(default_factory=list)
     quarantine: list[str] = Field(default_factory=list)
+    # Capabilities this role's models provide (text/json/vision/…). Optional: a
+    # custom role that omits it is treated as satisfying whatever a caller
+    # requires (the self-healing engine won't filter it out on capability
+    # grounds), preserving pre-self-healing custom-role behavior.
+    capabilities: list[str] | None = None
 
 
 class Config(BaseModel):

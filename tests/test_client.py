@@ -360,6 +360,52 @@ def test_generate_json_unknown_role_raises_public_exception(registered_key):
                              privacy="cloud_allowed", retries=0)
 
 
+def test_generate_json_tries_autopull_ollama_candidate(registered_key, monkeypatch):
+    """With auto_pull on, a not-yet-installed Ollama incumbent is still a valid
+    candidate (the broker gate-pulls it) — generate_json attempts it rather than
+    raising without an HTTP call."""
+    cfg = {"machine": {"auto_pull": True}, "roles": {"classification": {
+        "model": "fresh:latest", "backend": "ollama",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body('{"ok": true}', model="fresh:latest")),
+    ])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: False)
+    out = client.generate_json(
+        "q", role="classification", config=cfg, api=api,
+        required_capabilities={"classification", "json"}, retries=0,
+    )
+    assert out == {"ok": True}
+    assert [r["json"]["model"] for r in api.requests] == ["fresh:latest"]
+
+
+def test_generate_json_custom_role_without_declared_capabilities(
+    registered_key, monkeypatch
+):
+    """A user-defined role that declares no capabilities must still resolve — it
+    is assumed to satisfy the caller's required capabilities, not filtered out."""
+    cfg = {"roles": {"my_role": {"model": "custom:latest", "backend": "ollama"}}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body('{"ok": true}', model="custom:latest")),
+    ])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+    out = client.generate_json("q", role="my_role", config=cfg, api=api, retries=0)
+    assert out == {"ok": True}
+
+
+def test_role_entry_loads_declared_capabilities():
+    """RoleEntry must preserve a declared capabilities list (Pydantic previously
+    stripped the unknown YAML key, emptying custom-role capabilities)."""
+    from cheapskate.config import Config
+
+    cfg = Config.model_validate({"roles": {"my_role": {
+        "model": "custom:latest", "backend": "ollama",
+        "capabilities": ["text", "json", "vision"],
+    }}})
+    assert cfg.roles["my_role"].capabilities == ["text", "json", "vision"]
+
+
 def test_generate_json_rejects_undeclared_requested_capability(registered_key, monkeypatch):
     cfg = {"roles": {"classification": {
         "model": "text-only:latest", "backend": "ollama",
@@ -377,7 +423,10 @@ def test_generate_json_rejects_undeclared_requested_capability(registered_key, m
 
 
 def test_generate_json_skips_uninstalled_incumbent(registered_key, monkeypatch):
-    cfg = {"roles": {"classification": {
+    # auto_pull off so an uninstalled Ollama incumbent is genuinely unavailable
+    # (with auto_pull on it would be a valid gate-pull candidate — see the
+    # dedicated auto_pull test below).
+    cfg = {"machine": {"auto_pull": False}, "roles": {"classification": {
         "model": "missing:latest", "backend": "ollama",
         "fallback": "present:latest",
         "capabilities": ["text", "classification", "json"],
@@ -456,7 +505,9 @@ def test_generate_json_never_cloud_rejects_nonlocal_backend_on_loopback(
 def test_generate_json_never_cloud_rejects_ambiguous_remote_fallback(
     registered_key, monkeypatch
 ):
-    cfg = {"roles": {
+    # auto_pull off so the uninstalled local incumbent is genuinely unavailable
+    # and the only installed candidate is the ambiguous remote fallback.
+    cfg = {"machine": {"auto_pull": False}, "roles": {
         "classification": {
             "model": "missing-local:latest", "backend": "ollama",
             "fallback": "shared-model",

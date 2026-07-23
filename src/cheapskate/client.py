@@ -290,6 +290,12 @@ def _validate_raw_schema(value: Any, schema: dict, path: str = "$") -> Any:
     return value
 
 
+def _auto_pull_enabled(config: Any) -> bool:
+    """True when the machine may gate-pull an absent Ollama model on request, so
+    a not-yet-installed Ollama candidate is still serveable via the broker."""
+    return bool(_get(_get(config, "machine", None), "auto_pull", True))
+
+
 def _candidate_installed(spec: Any) -> bool:
     """Probe actual local installation state without downloading anything.
 
@@ -437,7 +443,10 @@ def generate_json(
         )
 
         required = frozenset(required_capabilities or {"json"})
-        declared = role_capabilities(role, config=config)
+        # A role that declares no capabilities (custom roles, and any role whose
+        # config omits the field) is assumed to satisfy what the caller requires,
+        # rather than being filtered out for lacking a declaration.
+        declared = role_capabilities(role, config=config) or required
         contract = JobContract(
             job_id=job_id or f"client.generate_json:{role}",
             role=role,
@@ -457,7 +466,13 @@ def generate_json(
                 spec.model,
                 spec.backend,
                 capabilities=declared,
-                installed=_candidate_installed(spec),
+                # An absent Ollama model is still a valid candidate when auto_pull
+                # is on — the broker gate-pulls it on request, as ensure_role did
+                # before the self-healing engine gated candidacy.
+                installed=(
+                    _candidate_installed(spec)
+                    or (spec.backend == "ollama" and _auto_pull_enabled(config))
+                ),
                 local=_serving_spec_is_local(spec),
             )
             for spec in role_specs
