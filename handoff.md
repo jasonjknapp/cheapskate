@@ -15,7 +15,10 @@
   - R2-2 [major] a quality-then-transport failure cross-attributed the incumbent's output to the fallback (regression from R1's F5) → router resets `last_env` per candidate.
   - R2-3 [major] `_candidate_installed` filtered out lmstudio/remote role candidates → now eligible (no downloadable artifact; reachability checked at invoke).
   - R2-4 [minor] unknown role raised internal `LocalUnavailable` → normalized to public `CheapskateUnavailable` in `complete()` + `generate_json()`.
-- **R3:** running (fresh Sol, base main, on `a89c492`). Need R3 + R4 both clean for the 2-clean gate.
+- **R3 (Sol, base main, on `a89c492`):** NOT clean — 2 P1 regressions the self-healing candidate filter introduced, both fixed at `c28f2cf` (419 pass, Ruff clean, +3 tests):
+  - R3-1 [P1] an uninstalled Ollama incumbent under `machine.auto_pull` was filtered out (raise, no HTTP) instead of being gate-pulled → auto_pull candidates eligible again (allowance at the call site; `_candidate_installed` stays a pure probe).
+  - R3-2 [P1] a custom role that declares no capabilities had every candidate filtered → undeclared caps now assumed to satisfy the required set; `RoleEntry` gains an optional `capabilities` field (Pydantic no longer strips it).
+- **R4:** running (fresh Sol, base main, on `c28f2cf`). Convergence trend: R1 5→R2 4→R3 2 findings, decreasing severity.
 
 ## 📌 Current State
 
