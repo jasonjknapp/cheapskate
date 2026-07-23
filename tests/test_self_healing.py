@@ -91,6 +91,7 @@ def test_engine_installs_best_ranked_candidate_when_installed_fleet_exhausted():
         fit=lambda candidate, _contract: (True, "fits"),
         evaluate=lambda candidate, _contract: (True, "job canary passed", 1.0),
         promote=lambda candidate, _contract: True,
+        rollback=lambda candidate, _contract: True,
     )
 
     assert result.model == "new-best"
@@ -134,6 +135,7 @@ def test_recovery_adapter_exceptions_are_classified_and_notify_failure(stage):
         "evaluate": (boom if stage == "evaluate"
                      else lambda _candidate, _contract: (True, "passed", 1.0)),
         "promote": (boom if stage == "promote" else lambda _candidate, _contract: True),
+        "rollback": lambda _candidate, _contract: True,
     }
     with pytest.raises(NoCompatibleModel) as exc_info:
         SelfHealingEngine(notify=notices.append).run(
@@ -145,6 +147,95 @@ def test_recovery_adapter_exceptions_are_classified_and_notify_failure(stage):
 
     assert f"{stage} adapter failed" in str(exc_info.value)
     assert notices[-1]["event"] == "model_recovery_failed"
+
+
+def test_promoted_challenger_rolled_back_when_it_cannot_serve():
+    """H1: a promoted challenger that then fails to serve the live job must be
+    rolled back — the deposed incumbent was proven, the challenger was not."""
+    notices: list[dict] = []
+    rolled_back: list[str] = []
+    contract = JobContract(
+        job_id="sara.coach", role="reasoning",
+        required_capabilities={"reasoning"}, repair_attempts=0,
+    )
+    discovered = [
+        Candidate("challenger", "mlx", frozenset({"reasoning"}),
+                  discovery_score=0.9, local=True),
+    ]
+    engine = SelfHealingEngine(notify=notices.append)
+    with pytest.raises(NoCompatibleModel):
+        engine.run(
+            contract,
+            [Candidate("broken", "mlx", frozenset({"reasoning"}), local=True)],
+            invoke=lambda _candidate, _feedback: (_ for _ in ()).throw(TimeoutError("dead")),
+            validate=lambda _value: (True, ""),
+            discover=lambda _contract: discovered,
+            install=lambda _candidate: True,
+            fit=lambda _candidate, _contract: (True, "fits"),
+            evaluate=lambda _candidate, _contract: (True, "passed", 1.0),
+            promote=lambda _candidate, _contract: True,
+            rollback=lambda candidate, _contract: rolled_back.append(candidate.model) or True,
+        )
+    assert rolled_back == ["challenger"]  # called once, with the promoted candidate
+    events = [n["event"] for n in notices]
+    assert (
+        events.index("model_promoted")
+        < events.index("model_rollback")
+        < events.index("model_recovery_failed")
+    )
+
+
+def test_promotion_without_rollback_is_refused():
+    """H1: mandatory-with-promote — a caller that can promote MUST supply rollback,
+    else discovery is refused with a SAFETY failure and nothing is installed."""
+    installed: list[str] = []
+    engine = SelfHealingEngine()
+    with pytest.raises(NoCompatibleModel, match="rollback gate"):
+        engine.run(
+            JobContract(job_id="guarded.promote", role="reasoning", repair_attempts=0),
+            [],
+            invoke=lambda _candidate, _feedback: "unused",
+            validate=lambda _value: (True, ""),
+            discover=lambda _contract: [Candidate("challenger", "mlx", local=True)],
+            install=lambda candidate: installed.append(candidate.model) or True,
+            fit=lambda _candidate, _contract: (True, "fits"),
+            evaluate=lambda _candidate, _contract: (True, "passed", 1.0),
+            promote=lambda _candidate, _contract: True,
+        )
+    assert installed == []  # refused before any install
+
+
+def test_rollback_adapter_failure_is_recorded_and_engine_raises_cleanly():
+    """H1: a rollback callback that raises is recorded via adapter-failure and the
+    engine still raises NoCompatibleModel cleanly — rollback is never a silent
+    success path and a broken adapter never crashes recovery."""
+    notices: list[dict] = []
+    contract = JobContract(
+        job_id="coach.rb", role="reasoning",
+        required_capabilities={"reasoning"}, repair_attempts=0,
+    )
+    discovered = [
+        Candidate("challenger", "mlx", frozenset({"reasoning"}), local=True),
+    ]
+    engine = SelfHealingEngine(notify=notices.append)
+    with pytest.raises(NoCompatibleModel) as exc_info:
+        engine.run(
+            contract,
+            [Candidate("broken", "mlx", frozenset({"reasoning"}), local=True)],
+            invoke=lambda _candidate, _feedback: (_ for _ in ()).throw(TimeoutError("dead")),
+            validate=lambda _value: (True, ""),
+            discover=lambda _contract: discovered,
+            install=lambda _candidate: True,
+            fit=lambda _candidate, _contract: (True, "fits"),
+            evaluate=lambda _candidate, _contract: (True, "passed", 1.0),
+            promote=lambda _candidate, _contract: True,
+            rollback=lambda _candidate, _contract: (_ for _ in ()).throw(
+                RuntimeError("rollback boom")
+            ),
+        )
+    assert "rollback adapter failed" in str(exc_info.value)
+    assert notices[-1]["event"] == "model_recovery_failed"
+    assert "model_rollback" in [n["event"] for n in notices]  # fired despite the raise
 
 
 def test_capability_mismatch_is_skipped_without_invocation():

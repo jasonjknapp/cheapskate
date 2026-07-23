@@ -94,6 +94,70 @@ def test_role_fallback_uses_broker_exact_model_route_metadata():
     assert fallback.endpoint == "https://models.example.com/v1"
 
 
+def test_resolve_uses_rollback_snapshot_backend_not_string_inference():
+    """H2: a retained rollback snapshot resolves to its stored backend/endpoint/
+    size, NOT string inference — a former lmstudio ``vendor/model`` would else be
+    mis-inferred as MLX and lose its endpoint."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/current", "backend": "mlx",
+        "rollback": ["vendor/former"],
+        "rollback_configs": {"vendor/former": {
+            "backend": "lmstudio",
+            "endpoint": "http://127.0.0.1:1234/v1",
+            "approx_gb": 12.0,
+        }},
+    }}}
+    spec = resolve(model="vendor/former", config=cfg)
+    assert spec.backend == "lmstudio"  # NOT mlx (the slash-infer default)
+    assert spec.endpoint == "http://127.0.0.1:1234/v1"
+    assert spec.approx_gb == 12.0
+    assert spec.role == "reasoning"
+
+
+def test_role_candidates_carry_rollback_snapshot_spec():
+    """H2: the single-point snapshot resolution is inherited by role_candidates()."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/current", "backend": "mlx",
+        "rollback": ["vendor/former"],
+        "rollback_configs": {"vendor/former": {
+            "backend": "lmstudio",
+            "endpoint": "http://127.0.0.1:1234/v1",
+            "approx_gb": 12.0,
+        }},
+    }}}
+    candidates = role_candidates("reasoning", config=cfg)
+    former = next(c for c in candidates if c.model == "vendor/former")
+    assert former.backend == "lmstudio"
+    assert former.endpoint == "http://127.0.0.1:1234/v1"
+
+
+def test_live_incumbent_wins_over_rollback_snapshot():
+    """H2: a live incumbent match always wins over a stale snapshot for the same
+    model — stale metadata never shadows live state."""
+    cfg = {"roles": {
+        "reasoning": {"model": "shared/model", "backend": "mlx"},
+        "code": {
+            "model": "org/coder", "backend": "ollama",
+            "rollback": ["shared/model"],
+            "rollback_configs": {"shared/model": {
+                "backend": "lmstudio", "endpoint": "http://127.0.0.1:1234/v1",
+            }},
+        },
+    }}
+    spec = resolve(model="shared/model", config=cfg)
+    assert spec.backend == "mlx"  # live reasoning incumbent, not the code snapshot
+    assert spec.role == "reasoning"
+
+
+def test_resolve_no_snapshot_falls_back_to_string_inference():
+    """H2 back-compat: a model in no ``rollback_configs`` still infers by string
+    (older registries / hand-edited entries)."""
+    cfg = {"roles": {"reasoning": {"model": "org/current", "backend": "mlx"}}}
+    spec = resolve(model="vendor/former", config=cfg)
+    assert spec.backend == "mlx"  # slash → MLX inference, no snapshot present
+    assert spec.role is None
+
+
 def test_resolve_config_backend_endpoint_override():
     # A non-localhost URL in config.backends IS the multi-machine story.
     cfg = {"roles": {}, "backends": {"ollama": "http://10.0.0.9:11434"}}

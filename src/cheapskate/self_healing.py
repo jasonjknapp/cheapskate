@@ -143,6 +143,7 @@ ValidateFn = Callable[[Any], tuple[bool, str] | tuple[bool, str, float]]
 FitFn = Callable[[Candidate, JobContract], tuple[bool, str]]
 EvaluateFn = Callable[[Candidate, JobContract], tuple[bool, str, float]]
 PromoteFn = Callable[[Candidate, JobContract], bool]
+RollbackFn = Callable[[Candidate, JobContract], bool]
 
 
 class SelfHealingEngine:
@@ -205,6 +206,41 @@ class SelfHealingEngine:
             })
         return True
 
+    def _rollback(
+        self,
+        candidate: Candidate,
+        contract: JobContract,
+        rollback: RollbackFn | None,
+        failures: list[dict[str, str]],
+    ) -> None:
+        """Restore the prior incumbent after a promoted challenger failed to serve.
+
+        A raising callback is recorded via ``_adapter_failure``; a False return is
+        recorded as a SAFETY failure entry. The rollback is never a silent success
+        path — the engine still raises ``NoCompatibleModel`` at the end — and a
+        broken rollback adapter never crashes the engine. A ``model_rollback``
+        notification always fires so the restoration is observable.
+        """
+        if rollback is None:
+            return
+        try:
+            restored = rollback(candidate, contract)
+        except Exception as exc:  # noqa: BLE001 - a broken adapter must not crash recovery
+            self._adapter_failure(failures, candidate.model, "rollback", exc)
+        else:
+            if not restored:
+                failures.append({
+                    "model": candidate.model,
+                    "kind": FailureKind.SAFETY.value,
+                    "detail": "rollback gate did not restore the prior incumbent",
+                })
+        self._notify({
+            "event": "model_rollback",
+            "job_id": contract.job_id,
+            "model": candidate.model,
+            "backend": candidate.backend,
+        })
+
     @staticmethod
     def _adapter_failure(
         failures: list[dict[str, str]], model: str, stage: str, exc: BaseException
@@ -228,6 +264,7 @@ class SelfHealingEngine:
         fit: FitFn | None = None,
         evaluate: EvaluateFn | None = None,
         promote: PromoteFn | None = None,
+        rollback: RollbackFn | None = None,
     ) -> RunResult:
         self.notification_failures = []
         started_at = self.monotonic()
@@ -249,6 +286,15 @@ class SelfHealingEngine:
                     "model": "discovery",
                     "kind": FailureKind.SAFETY.value,
                     "detail": "discovery requires fit, eval/canary, and promotion gates",
+                })
+                discovered = []
+            elif rollback is None:
+                # A caller that can promote a challenger MUST be able to undo it:
+                # a failed promotion that stays incumbent is worse than no recovery.
+                failures.append({
+                    "model": "discovery",
+                    "kind": FailureKind.SAFETY.value,
+                    "detail": "promotion requires a rollback gate to undo a failed challenger",
                 })
                 discovered = []
             else:
@@ -356,6 +402,12 @@ class SelfHealingEngine:
                 )
                 if result is not None:
                     return result
+                # The challenger was promoted but could not serve the live job (for
+                # ANY reason, including deadline exhaustion). It is unproven and has
+                # displaced a proven incumbent — restore the incumbent before we
+                # continue the discovered loop or raise. (rollback is guaranteed
+                # non-None here by the guard above.)
+                self._rollback(candidate, contract, rollback, failures)
 
         event = {
             "event": "model_recovery_failed",

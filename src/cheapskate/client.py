@@ -190,12 +190,22 @@ def complete(
         from .backends.resolve import LocalUnavailable, role_candidates
 
         try:
-            role_specs = role_candidates(role, config=config)[1:]
+            role_specs = role_candidates(role, config=config)
         except LocalUnavailable as exc:
             # Honor the public contract: an unknown/misconfigured role surfaces as
             # CheapskateUnavailable, not the internal resolver exception.
             raise CheapskateUnavailable(str(exc)) from exc
-        candidates.extend((candidate.model, None) for candidate in role_specs)
+        # Drive the role path off the FULL quarantine-aware candidate list, each by
+        # concrete model — matching generate_json's role path (client.py:465-523)
+        # and the router (router/task.py). Dropping the (None, role) live-broker-role
+        # seed is what closes H3: resolve() ignores quarantine, so a (None, role)
+        # request could re-serve a globally-quarantined incumbent that
+        # role_candidates() has already removed.
+        if not role_specs:
+            raise CheapskateUnavailable(
+                f"role {role!r}: all candidates are quarantined or unavailable"
+            )
+        candidates = [(spec.model, None) for spec in role_specs]
 
     body = None
     text = None
@@ -542,6 +552,18 @@ def generate_json(
                     temperature=temperature, timeout=timeout, response_json=True,
                     privacy=privacy, config=config, api=api,
                 )
+                # Fail closed on served-model identity (mirrors the role path,
+                # client.py:518-522): a backend-side fallback must not satisfy an
+                # exact-model call with mis-attributed output. A backend that omits
+                # ``model`` (served None) is rejected too — provenance is required,
+                # not assumed. The gate does not apply to the degenerate
+                # model=None call (unreachable past the broker / refused earlier).
+                if candidate is not None:
+                    served = body.get("model") if isinstance(body, dict) else None
+                    if served != candidate:
+                        raise CheapskateUnavailable(
+                            f"requested {candidate!r} but broker served {served!r}"
+                        )
                 text = _content(body)
                 return parse_response(text)
             except CheapskateUnavailable as exc:

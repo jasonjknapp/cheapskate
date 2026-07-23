@@ -64,10 +64,11 @@ def test_complete_returns_text_and_metadata(registered_key):
     assert out["text"] == "hello world"
     assert out["model"] == "test-model"
     assert out["eval_count"] == 5
-    # Routed to the broker chat endpoint, with a role: model field + bearer key.
+    # Routed to the broker chat endpoint, with the concrete resolved incumbent
+    # (H3: client-side quarantine-aware resolution, not the role: wire seed) + key.
     req = api.requests[0]
     assert req["url"].endswith("/v1/chat/completions")
-    assert req["json"]["model"] == "role:reasoning"
+    assert req["json"]["model"] == "gpt-oss:120b"  # default "reasoning" incumbent
     assert req["headers"]["Authorization"] == f"Bearer {registered_key}"
     # D8: the internal marker so the broker does not double-count this call in econ.
     assert req["headers"]["X-Cheapskate-Internal"] == "1"
@@ -86,7 +87,7 @@ def test_complete_role_fails_over_to_registered_fallback(registered_key):
     assert out["text"] == "recovered"
     assert out["model"] == "fallback:latest"
     assert [req["json"]["model"] for req in api.requests] == [
-        "role:reasoning", "fallback:latest",
+        "org/incumbent", "fallback:latest",
     ]
 
 
@@ -105,8 +106,54 @@ def test_complete_role_fails_over_after_malformed_success(registered_key, bad_bo
     out = client.complete("hi", role="reasoning", config=cfg, api=api)
     assert out["text"] == "recovered"
     assert [request["json"]["model"] for request in api.requests] == [
-        "role:reasoning", "fallback:latest",
+        "org/incumbent", "fallback:latest",
     ]
+
+
+def test_complete_role_quarantined_incumbent_serves_fallback(registered_key):
+    """H3: when the incumbent is globally quarantined, complete() must serve the
+    eligible fallback and NEVER re-serve the quarantined incumbent (the old
+    (None, role) seed resolved past quarantine straight back to the incumbent)."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent", "backend": "mlx",
+        "fallback": "fallback:latest",
+        "quarantine": ["org/incumbent"],
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body("from fallback", model="fallback:latest")),
+    ])
+    out = client.complete("hi", role="reasoning", config=cfg, api=api)
+    assert out["text"] == "from fallback"
+    # Exactly one request, and it is the fallback — the incumbent is never sent.
+    assert [req["json"]["model"] for req in api.requests] == ["fallback:latest"]
+
+
+def test_complete_role_no_quarantine_serves_incumbent(registered_key):
+    """H3 regression guard: with no quarantine the incumbent still serves first."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent", "backend": "mlx",
+        "fallback": "fallback:latest",
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body("from incumbent", model="org/incumbent")),
+    ])
+    out = client.complete("hi", role="reasoning", config=cfg, api=api)
+    assert out["text"] == "from incumbent"
+    assert [req["json"]["model"] for req in api.requests] == ["org/incumbent"]
+
+
+def test_complete_role_fully_quarantined_raises_naming_role(registered_key):
+    """H3: a role whose every candidate is quarantined surfaces a clear
+    CheapskateUnavailable that names the role — never a bare None dispatch."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent", "backend": "mlx",
+        "fallback": "fallback:latest",
+        "quarantine": ["org/incumbent", "fallback:latest"],
+    }}}
+    api = FakeClient([])
+    with pytest.raises(client.CheapskateUnavailable, match="reasoning"):
+        client.complete("hi", role="reasoning", config=cfg, api=api)
+    assert api.requests == []
 
 
 def test_complete_passes_system_prompt(registered_key):
@@ -187,7 +234,7 @@ def test_api_key_from_env_wins(monkeypatch):
 
 
 def test_generate_json_parses_object(registered_key):
-    api = FakeClient([FakeResponse(200, _chat_body('{"fruit": "apple"}'))])
+    api = FakeClient([FakeResponse(200, _chat_body('{"fruit": "apple"}', model="m"))])
     out = client.generate_json("list a fruit", model="m", api=api)
     assert out == {"fruit": "apple"}
     # Structured requests set response_format json_object.
@@ -196,8 +243,8 @@ def test_generate_json_parses_object(registered_key):
 
 def test_generate_json_repairs_then_succeeds(registered_key):
     api = FakeClient([
-        FakeResponse(200, _chat_body("not json at all")),
-        FakeResponse(200, _chat_body('{"ok": true}')),
+        FakeResponse(200, _chat_body("not json at all", model="m")),
+        FakeResponse(200, _chat_body('{"ok": true}', model="m")),
     ])
     out = client.generate_json("q", model="m", api=api, retries=2)
     assert out == {"ok": True}
@@ -208,7 +255,7 @@ def test_generate_json_repairs_then_succeeds(registered_key):
 
 
 def test_generate_json_exhausts_retries_and_degrades(registered_key):
-    api = FakeClient([FakeResponse(200, _chat_body("garbage")) for _ in range(3)])
+    api = FakeClient([FakeResponse(200, _chat_body("garbage", model="m")) for _ in range(3)])
     with pytest.raises(client.CheapskateUnavailable):
         client.generate_json("q", model="m", api=api, retries=2)
     assert len(api.requests) == 3  # retries + 1
@@ -221,21 +268,48 @@ def test_generate_json_validates_pydantic_schema(registered_key):
         name: str
         qty: int
 
-    api = FakeClient([FakeResponse(200, _chat_body('{"name": "pear", "qty": 3}'))])
+    api = FakeClient([FakeResponse(200, _chat_body('{"name": "pear", "qty": 3}', model="m"))])
     out = client.generate_json("q", schema=Fruit, model="m", api=api)
     assert out == {"name": "pear", "qty": 3}
 
 
 def test_generate_json_repairs_valid_json_with_wrong_schema_root(registered_key):
     api = FakeClient([
-        FakeResponse(200, _chat_body('[{"items": []}]')),
-        FakeResponse(200, _chat_body('{"items": []}')),
+        FakeResponse(200, _chat_body('[{"items": []}]', model="m")),
+        FakeResponse(200, _chat_body('{"items": []}', model="m")),
     ])
     schema = {"type": "object", "required": ["items"],
               "properties": {"items": {"type": "array"}}}
     out = client.generate_json("q", schema=schema, model="m", api=api, retries=1)
     assert out == {"items": []}
     assert len(api.requests) == 2
+
+
+def test_generate_json_explicit_model_accepts_matching_served(registered_key):
+    """H4: the explicit-model path serves normally when the broker attributes the
+    response to the requested model."""
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}', model="m"))])
+    out = client.generate_json("q", model="m", api=api)
+    assert out == {"ok": True}
+
+
+def test_generate_json_explicit_model_rejects_served_mismatch(registered_key):
+    """H4: a backend-side fallback that serves a DIFFERENT model than requested is
+    a provenance failure — CheapskateUnavailable, no repair nudge, exactly one call."""
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}', model="impostor"))])
+    with pytest.raises(client.CheapskateUnavailable, match="broker served"):
+        client.generate_json("q", model="m", api=api, retries=0)
+    assert len(api.requests) == 1  # provenance failure surfaces; no schema-repair nudge
+
+
+def test_generate_json_explicit_model_rejects_missing_served(registered_key):
+    """H4: a body that omits ``model`` fails closed — provenance is required."""
+    body = {"choices": [{"message": {"content": '{"ok": true}'}}],
+            "usage": {"completion_tokens": 5, "prompt_tokens": 3}}
+    api = FakeClient([FakeResponse(200, body)])
+    with pytest.raises(client.CheapskateUnavailable, match="broker served"):
+        client.generate_json("q", model="m", api=api, retries=0)
+    assert len(api.requests) == 1
 
 
 def test_generate_json_transport_error_degrades(registered_key):
@@ -561,6 +635,32 @@ def test_generate_json_never_cloud_rejects_nonlocal_backend_on_loopback(
         client.generate_json(
             "private", config=cfg, api=api, privacy="never_cloud", retries=0,
             **routing,
+        )
+    assert api.requests == []
+
+
+def test_generate_json_never_cloud_rejects_rollback_snapshot_nonlocal_endpoint(
+    registered_key, monkeypatch
+):
+    """H2 trust: a rollback snapshot carrying a NONLOCAL endpoint is refused by the
+    existing never_cloud gates — a poisoned snapshot cannot smuggle a cloud route
+    into a never_cloud call. No bespoke snapshot validation is needed."""
+    cfg = {"roles": {"classification": {
+        "model": "org/current", "backend": "ollama",
+        "capabilities": ["text", "classification", "json"],
+        "rollback": ["vendor/former"],
+        "rollback_configs": {"vendor/former": {
+            "backend": "lmstudio",
+            "endpoint": "https://models.example.com/v1",
+        }},
+    }}}
+    api = FakeClient([FakeResponse(200, _chat_body('{"ok": true}', model="vendor/former"))])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+
+    with pytest.raises(client.CheapskateUnavailable, match="verified local backend"):
+        client.generate_json(
+            "private", model="vendor/former", config=cfg, api=api,
+            privacy="never_cloud", retries=0,
         )
     assert api.requests == []
 

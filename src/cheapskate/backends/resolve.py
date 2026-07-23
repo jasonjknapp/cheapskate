@@ -221,6 +221,32 @@ def resolve(
                 quant=_get(spec, "quant"),
             )
 
+    # A retained rollback snapshot carries the deposed incumbent's TRUE backend,
+    # endpoint, and size (registry.promote writes rollback_configs). Honor it
+    # before string inference so a former lmstudio ``vendor/model`` is not
+    # mis-inferred as MLX (losing its endpoint). A live incumbent match above
+    # always wins (stale metadata never shadows live state); first matching role
+    # in table order wins. The snapshot carries the same local-state trust as a
+    # role ``endpoint`` field and flows through every existing never_cloud gate.
+    for rname, spec in roles.items():
+        snapshots = _get(spec, "rollback_configs")
+        if not isinstance(snapshots, dict):
+            continue
+        snap = snapshots.get(model)
+        if not isinstance(snap, dict):
+            continue
+        snap_backend = _get(snap, "backend")
+        if not snap_backend:
+            continue
+        return BackendSpec(
+            model=model,
+            backend=snap_backend,
+            endpoint=_get(snap, "endpoint") or default_endpoint(snap_backend, config),
+            approx_gb=_get(snap, "approx_gb"),
+            role=rname,
+            quant=_get(snap, "quant"),
+        )
+
     backend = infer_backend(model)
     return BackendSpec(
         model=model,
