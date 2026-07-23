@@ -23,7 +23,8 @@
   - R4-2 [P1] a promoted challenger that fails its first live invocation is not rolled back (engine `run()` has no rollback callback). **Latent: the public client does not wire `promote`/`discover` (client.py:521), so this lifecycle is not on the release surface.**
   - R4-3 [P1] `role_candidates` resolves a rollback entry by model string only, losing stored backend/endpoint from `rollback_configs`. **Also only reachable once promotion populates rollbacks — not on the public client surface.**
   - R4-4 [minor] `role_candidates` raises `backends.resolve.LocalUnavailable`, not `router.task.LocalUnavailable`, for a task referencing a missing role (trivial normalization; on the used path).
-- **ESCALATED to Jason at the round-4 budget (2026-07-23).** Convergence count 5→4→2→4 is not closing; the privacy CORE (the patch's purpose) is hardened, but the fresh lens keeps surfacing self-healing discovery/promote/rollback lifecycle issues that are largely NOT wired into the public client's flow. Decision needed on scope — see FOR-JASON.md. No further fixes/reviews until Jason directs.
+- **JASON DECISION 2026-07-23 → SCOPE A (ship privacy core).** Executed the scope-A cleanup at `a549fd9` (420 pass, Ruff clean): R4-4 fixed (router surfaces `router.task.LocalUnavailable`), R4-1 documented (bare-string completion is a trusted-adapter contract; provenance enforcement stays on the fail-closed dict path). The latent promote/rollback lifecycle findings (R4-2/R4-3) are deferred to [`docs/specs/self-healing-lifecycle-hardening.md`](docs/specs/self-healing-lifecycle-hardening.md) — they are NOT wired into the public client (`client.py:521` calls `engine.run` without promote/discover).
+- **R5 (scoped 2-clean, first pass):** running on `a549fd9`, lens explicitly scoped to the privacy/attribution/eligibility surface with the lifecycle findings marked out-of-scope. Need R5 + R6 both clean → push + PR → STOP at exit gate for Jason's go.
 
 ## 📌 Current State
 

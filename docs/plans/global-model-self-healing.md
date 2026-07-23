@@ -1,9 +1,9 @@
 <!-- PLAN-STATE v1 -->
 current_phase: release-prep
 phase_status: in_progress
-last_commit:  c28f2cf4708af9a644aeaae26fc7ddf500cfcdbd
-phase_status: escalated_round4
-next_action:  ESCALATED to Jason at round-4 budget. Privacy core hardened (R4 confirms); R4's 4 findings open (2 latent promote/rollback lifecycle P1s NOT wired into the public client, 1 trivial, 1 string-adapter contract tension). Awaiting Jason's scope decision (A ship privacy core / B keep converging / C pause) in FOR-JASON.md. No further fixes/reviews until directed.
+last_commit:  a549fd96d2a4d9fce3e183c47b5223f9dfe57afd
+phase_status: release-prep
+next_action:  JASON chose SCOPE A. Scope-A cleanup done at a549fd9 (420 pass, Ruff clean): R4-4 fixed, R4-1 documented, lifecycle findings deferred to docs/specs/self-healing-lifecycle-hardening.md. R5 scoped review running; need R5+R6 clean → push + PR → STOP at exit gate.
 -->
 
 # Global Model Self-Healing
