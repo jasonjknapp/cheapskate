@@ -1,8 +1,8 @@
 <!-- PLAN-STATE v1 -->
 current_phase: release-prep
 phase_status: in_progress
-last_commit:  15661fa506b26f777434cab9df0153e6d5f91195
-next_action:  Complete two fresh clean adversarial passes, then open the release PR.
+last_commit:  a41b4efa25a0a532fca37eabcbb73c94da1d43c6
+next_action:  Finish the uncommitted broker privacy and exact-attribution patch, make focused tests green, checkpoint, then restart two fresh clean adversarial reviews.
 -->
 
 # Global Model Self-Healing
@@ -82,3 +82,10 @@ This plan covers the public Cheapskate product. The machine-specific agent-workf
 - Every model-backed scheduled job is inventoried, contract-bound, and covered by deterministic failure simulation.
 - The daily brief reports accurate causes and contains no current model-related failure.
 - Public Cheapskate exposes and documents the same core behavior with a green full suite.
+
+## 2026-07-23 release handoff
+
+- Branch/worktree: `feature/model-self-healing` at `/Users/jason/dev/Personal/.worktrees/cheapskate/model-self-healing`; committed head `a41b4ef`, with an intentional uncommitted privacy/attribution patch. No PR/push/merge/deploy occurred.
+- The patch standardizes `X-Model-Privacy: never_cloud`, makes the broker reject a non-local result after its own live resolution, and makes each local recovery attempt request the exact candidate model and reject a mismatched rich response model.
+- Focused suite result: `66 passed, 4 failed`. Fix the all-nonlocal role error message in `client.generate_json()` and update the two injected callbacks in `tests/test_task.py` to accept `model=None`; then rerun focused/full/Ruff before committing.
+- Paired machine release: `/Users/jason/dev/.worktrees/agent-workflows/global-model-self-healing`, committed `f93106b` plus matching uncommitted work. Atlas branch `fix/atlas-stash-conflict-recovery` at `35a5477` has no present worktree and must be reconciled separately with `origin/main`/`origin/release` `237889a`.

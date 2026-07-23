@@ -1,17 +1,21 @@
 # Cheapskate Handoff
 
-> **Last updated: 2026-07-22** (`feature/model-self-healing`) — implementation and deterministic verification complete; `/release-prep` adversarial review is running.
+> **Last updated: 2026-07-23** (`feature/model-self-healing`, `a41b4ef` + uncommitted hardening) — paused before the release gate; no PR, push, merge, deployment, model installation, or deletion occurred.
 
 ## 📌 Current State
 
-- Public self-healing primitives and adversarial-review remediations are complete through `15661fa`: semantic job contracts, bounded repair, exact-route same-role failover, declared capability enforcement, expiring job/model incompatibility, end-to-end never-cloud locality for structured and text paths, exact Ollama tag/capacity checks, guarded discovery/install/eval/promotion, quality-first ranking, adapter-isolated notification receipts, monotonic deadline admission, and protected source-independent LRU planning.
-- The public API remains source-compatible. A malformed HTTP 200 completion now changes candidates instead of escaping failover; dynamic discovery cannot serve until fit, eval, quality-floor, and promotion gates pass.
-- Verification is green: 403 tests, Ruff, diff hygiene, and the required local code-model review. The prior adversarial findings were remediated and the two-clean counter has restarted from zero on this checkpoint.
-- Machine-specific implementation lives in the paired agent-workflows release; Atlas/public-article hardening lives in the paired jknapp.com release. Nothing has been pushed, merged, deployed, or run live yet.
+- Public self-healing primitives and earlier adversarial-review remediations are committed through `a41b4ef`: semantic job contracts, bounded repair, exact-route same-role failover, declared capability enforcement, expiring job/model incompatibility, exact Ollama tag/capacity checks, guarded discovery/install/eval/promotion, quality-first ranking, notification receipts, deadline admission, and protected source-independent LRU planning.
+- The current uncommitted patch applies one broker-enforced `X-Model-Privacy: never_cloud` contract to text and structured requests, resolves privacy at the broker after live model resolution, and pins each router attempt to `candidate.model`. A rich completion whose returned model differs from that candidate is rejected so quarantine/telemetry cannot misattribute a hidden fallback.
+- Focused verification is **not green yet**: `70` tests ran; `66` passed and `4` failed. Two old injected callbacks in `tests/test_task.py` must accept the intentional `model=` keyword. Two `tests/test_client.py` cases expose a real error-message gap: all-nonlocal role candidates should raise the explicit verified-local-backend refusal rather than generic `NoCompatibleModel`.
+- The prior 403-test/Ruff result applies only to the committed predecessor. Any prior adversarial review is invalidated; the fresh two-clean counter is zero.
+- Machine runtime changes are in `/Users/jason/dev/.worktrees/agent-workflows/global-model-self-healing` at `f93106b` plus uncommitted changes. Atlas work is preserved on `fix/atlas-stash-conflict-recovery` at `35a5477`, but its recorded worktree is absent and `origin/main`/`origin/release` independently advanced to `237889a`; it needs a separate rebase/review decision.
 
 ## ▶ Next Action
 
-Complete two fresh clean adversarial passes, open the PR, rerun the exact-PR-SHA gate, then execute `/release-prod` under Jason's explicit authorization if every gate remains green.
+1. Read `docs/plans/global-model-self-healing.md` and this handoff, then inspect the uncommitted diff; preserve it.
+2. Add the explicit no-local-candidate refusal in `src/cheapskate/client.py`; update only the two injected callbacks in `tests/test_task.py` to accept `model=None` (the production contract must retain exact model selection).
+3. Run `PYTHONPATH=src /Users/jason/dev/Personal/cheapskate/.venv/bin/python -m pytest -q -p no:cacheprovider tests/test_client.py tests/test_task.py tests/test_task_cloud.py tests/test_broker_integration_smoke.py`, then full pytest and Ruff. Update this handoff and plan with actual counts and the new committed SHA.
+4. Restart `/release-prep`: two fresh clean adversarial reviews on the exact SHA, PR, exact-PR-SHA review/staging gates, then `/release-prod` only if all gates pass. Jason already authorized progression after passing gates; never start paid CI.
 
 ## 📐 Standing Directives
 
@@ -24,9 +28,9 @@ Complete two fresh clean adversarial passes, open the PR, rerun the exact-PR-SHA
 
 ## 🟢 Active Workstreams
 
-- `[cheapskate]` Release-prep gate in progress on the verified feature branch.
-- `[agent-workflows]` Paired global runtime/callsite release in progress independently.
-- `[jknapp.com]` Paired public article + autonomous Atlas recovery release in progress independently.
+- `[cheapskate]` Paused in release-prep with the uncommitted broker-privacy/attribution patch described above; four focused failures remain.
+- `[agent-workflows]` Paired global broker/runtime patch is uncommitted and needs a privileged or hermetic rerun after its sandbox-only manager-lock failures.
+- `[jknapp.com]` Atlas hardening branch is preserved but stranded from its worktree; reconcile with current `main`/`release` independently before release.
 
 ## 🧊 Cold Archive
 
