@@ -364,6 +364,9 @@ def _run_local(
 
     selected_model = candidates[0].model
     for candidate_index, candidate in enumerate(candidates):
+        # Track the model actually attempted so a fully-exhausted run attributes
+        # its error/output to the last candidate tried, not the incumbent.
+        selected_model = candidate.model
         feedback = None
         for candidate_attempt in range(max_retries + 1):
             attempts += 1
@@ -385,8 +388,13 @@ def _run_local(
                     prompt, system=ENVELOPE_SYSTEM, model=candidate.model,
                 )
                 if isinstance(raw, dict):
-                    served_model = raw.get("model")
-                    if served_model and served_model != candidate.model:
+                    # Verify the RAW served identity (client.complete exposes it as
+                    # served_model, None when the backend omitted provenance); fall
+                    # back to model only for injected/legacy dicts. A missing or
+                    # differing identity fails closed so a hidden fallback or an
+                    # MLX model swap cannot be attributed to this candidate.
+                    served_model = raw.get("served_model", raw.get("model"))
+                    if served_model != candidate.model:
                         raise LocalUnavailable(
                             f"requested {candidate.model!r} but broker served "
                             f"{served_model!r}"
@@ -419,7 +427,7 @@ def _run_local(
                 error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
             )
             if attempt_ok:
-                selected_model = candidate.model
+                # selected_model already tracks this candidate (set at loop top).
                 break
         if ok:
             compatibility.mark_compatible(job_id, selected_model)

@@ -70,14 +70,20 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-def _never_cloud_spec_is_local(spec: BackendSpec) -> bool:
+def _url_host_is_local(url: Any) -> bool:
+    """Loopback check on a concrete URL — the endpoint actually dispatched to,
+    which may differ from the pre-check spec after backend preparation."""
     try:
-        host = urlparse(str(spec.endpoint)).hostname
+        host = urlparse(str(url or "")).hostname
     except ValueError:
         return False
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _never_cloud_spec_is_local(spec: BackendSpec) -> bool:
     return (
         spec.backend in _LOCAL_SERVING_BACKENDS
-        and host in {"localhost", "127.0.0.1", "::1"}
+        and _url_host_is_local(spec.endpoint)
     )
 
 
@@ -556,6 +562,20 @@ def build_app(config: Any = None):
                 _emit_serve(False, status_code=503, error=str(e))
                 return JSONResponse({"error": str(e)}, status_code=503)
 
+            # never_cloud is verified again against the ACTUAL prepared base URL,
+            # not just the pre-check spec: prepare_backend re-resolves the role
+            # through ensure_role, so a registry change between the check above and
+            # here (or an MLX endpoint assigned during load) could yield a
+            # non-loopback target. Fail closed before the prompt leaves the box.
+            if privacy == "never_cloud" and not _url_host_is_local(base):
+                _emit_serve(False, status_code=422,
+                            error="never_cloud prepared endpoint is not local")
+                return JSONResponse(
+                    {"error": "never_cloud prepared endpoint is not local",
+                     "model": spec.model, "backend": spec.backend},
+                    status_code=422,
+                )
+
             payload["model"] = spec.model
             url = base + path
             stream = bool(payload.get("stream")) and not embed
@@ -640,6 +660,10 @@ def build_app(config: Any = None):
         via the cloud adapter and returned in OpenAI shape; a local route is
         proxied to the local backend. Safety classes fail closed with a clear
         HTTP status."""
+        privacy = request.headers.get("x-model-privacy", "cloud_allowed")
+        if privacy not in {"never_cloud", "cloud_allowed"}:
+            return JSONResponse({"error": "invalid privacy constraint"}, status_code=400)
+
         plan = plan_task_type_route(config, task_type)
         action = plan["action"]
 
@@ -647,6 +671,18 @@ def build_app(config: Any = None):
             _log("generation", task_type=task_type, route="refused", user=user,
                  ok=False, error=plan["class"], status_code=plan["status"])
             return JSONResponse({"error": plan["error"]}, status_code=plan["status"])
+
+        # never_cloud must never take the cloud dispatch, even when the dial would
+        # otherwise route this task_type to cloud. The local-proxy branch below
+        # re-verifies privacy in _proxy_generation; only the cloud branch needs an
+        # explicit refusal here.
+        if action == "cloud" and privacy == "never_cloud":
+            _log("generation", task_type=task_type, route="refused", user=user,
+                 ok=False, error="never_cloud forbids a cloud route", status_code=422)
+            return JSONResponse(
+                {"error": "never_cloud route is not a verified local backend"},
+                status_code=422,
+            )
 
         if action == "cloud":
             status, out = await asyncio.to_thread(

@@ -149,6 +149,25 @@ def test_local_job_repairs_then_switches_to_role_fallback():
     ]
 
 
+def test_exhausted_local_run_attributes_to_last_model_tried():
+    """When every candidate exhausts, the run's error/model must name the last
+    model actually attempted (the fallback), not the incumbent it started on."""
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }})
+
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=lambda *a, **k: _envelope("bad"),
+        verify=lambda out, crit: (False, "never good"),
+        max_retries=0,
+    )
+    assert res["ok"] is False
+    assert res["model"] == "fallback:latest"
+
+
 def test_local_job_rejects_broker_model_identity_mismatch():
     cfg = Config(roles={"reasoning": {
         "model": "org/incumbent", "backend": "mlx",

@@ -221,7 +221,12 @@ def complete(
     usage = body.get("usage") or {}
     return {
         "text": text,
+        # ``model`` stays substituted for display/back-compat; ``served_model`` is
+        # the RAW backend identity (None when the backend omitted it) so callers
+        # can verify attribution and fail closed on missing provenance rather than
+        # trusting the requested name we substituted in.
         "model": body.get("model", model),
+        "served_model": body.get("model"),
         "latency_s": round(time.monotonic() - start, 2),
         "eval_count": usage.get("completion_tokens"),
         "prompt_eval_count": usage.get("prompt_tokens"),
@@ -467,6 +472,15 @@ def generate_json(
                 config=config,
                 api=api,
             )
+            # Fail closed on served-model identity: attributing candidate A's
+            # compatibility/quarantine to a response that a hidden fallback served
+            # as B corrupts the self-healing state. A backend that omits the field
+            # (served None) is also rejected — provenance is required, not assumed.
+            served = body.get("model") if isinstance(body, dict) else None
+            if served != candidate.model:
+                raise CheapskateUnavailable(
+                    f"requested {candidate.model!r} but broker served {served!r}"
+                )
             return parse_response(_content(body))
 
         try:

@@ -304,6 +304,27 @@ def test_generate_json_skips_remote_incumbent_for_local_fallback(
     assert [req["json"]["model"] for req in api.requests] == ["local:latest"]
 
 
+def test_generate_json_role_rejects_served_model_mismatch(registered_key, monkeypatch):
+    """Role-path generate_json fails closed when the broker serves a different
+    model than the requested candidate — a hidden fallback must not be attributed
+    to the candidate's compatibility/quarantine state."""
+    cfg = {"roles": {"classification": {
+        "model": "local:latest", "backend": "ollama",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body('{"ok": true}', model="impostor:latest")),
+    ])
+    monkeypatch.setattr(client, "_candidate_installed", lambda _spec: True)
+
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json(
+            "q", role="classification", config=cfg, api=api,
+            required_capabilities={"classification", "json"}, retries=0,
+            privacy="never_cloud",
+        )
+
+
 def test_generate_json_rejects_undeclared_requested_capability(registered_key, monkeypatch):
     cfg = {"roles": {"classification": {
         "model": "text-only:latest", "backend": "ollama",
