@@ -223,6 +223,11 @@ class RoleEntry(BaseModel):
     # requires (the self-healing engine won't filter it out on capability
     # grounds), preserving pre-self-healing custom-role behavior.
     capabilities: list[str] | None = None
+    # Explicit serving endpoint for this role's backend. Required for a
+    # non-default backend (remote/lmstudio) so resolution targets the right URL
+    # instead of falling back to the Ollama localhost default. Without this field
+    # Pydantic would strip the YAML key and the role would mis-resolve.
+    endpoint: str | None = None
 
 
 class Config(BaseModel):

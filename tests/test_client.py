@@ -360,6 +360,69 @@ def test_generate_json_unknown_role_raises_public_exception(registered_key):
                              privacy="cloud_allowed", retries=0)
 
 
+class _BoomClient:
+    def post(self, *a, **k):
+        raise RuntimeError("no network in test")
+
+    def close(self):
+        pass
+
+
+def test_never_cloud_disables_env_proxy_trust(registered_key, monkeypatch):
+    """never_cloud must build the httpx client with trust_env=False so an
+    env-configured HTTP(S)_PROXY/ALL_PROXY cannot tunnel the private prompt off
+    the box even when the URL is loopback."""
+    captured = {}
+
+    def spy(*a, **k):
+        captured.update(k)
+        return _BoomClient()
+
+    monkeypatch.setattr(client.httpx, "Client", spy)
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("hi", model="concrete:latest", privacy="never_cloud")
+    assert captured.get("trust_env") is False
+
+
+def test_cloud_allowed_keeps_env_proxy_trust(registered_key, monkeypatch):
+    captured = {}
+
+    def spy(*a, **k):
+        captured.update(k)
+        return _BoomClient()
+
+    monkeypatch.setattr(client.httpx, "Client", spy)
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("hi", model="concrete:latest", privacy="cloud_allowed")
+    assert captured.get("trust_env") is True
+
+
+def test_typed_config_resolves_remote_role_endpoint():
+    """A typed Config role with a non-default backend keeps its endpoint (the
+    RoleEntry.endpoint field) instead of mis-resolving to the Ollama localhost."""
+    from cheapskate.backends.resolve import resolve
+    from cheapskate.config import Config
+
+    cfg = Config.model_validate({"roles": {"r": {
+        "model": "vendor/m", "backend": "remote",
+        "endpoint": "https://remote.example.com/v1",
+    }}})
+    spec = resolve(role="r", config=cfg)
+    assert spec.backend == "remote"
+    assert spec.endpoint == "https://remote.example.com/v1"
+
+
+def test_typed_config_backends_urls_used_for_default_endpoint():
+    """default_endpoint reads a typed BackendEntry's url, not only string maps."""
+    from cheapskate.backends.resolve import default_endpoint
+    from cheapskate.config import Config
+
+    cfg = Config.model_validate({"backends": {
+        "remote": {"kind": "remote", "url": "https://backend.example.com/v1"},
+    }})
+    assert default_endpoint("remote", cfg) == "https://backend.example.com/v1"
+
+
 def test_generate_json_tries_autopull_ollama_candidate(registered_key, monkeypatch):
     """With auto_pull on, a not-yet-installed Ollama incumbent is still a valid
     candidate (the broker gate-pulls it) — generate_json attempts it rather than

@@ -79,13 +79,26 @@ def default_endpoint(backend: str, config: Any = None) -> str:
 
 
 def _config_backends(config: Any) -> dict:
-    """The ``backends`` endpoint map from config, or {} if unset. Never raises."""
+    """The ``backends`` endpoint map from config, or {} if unset. Never raises.
+
+    Accepts both a plain ``{backend: url_str}`` dict AND the typed Config shape
+    where each value is a ``BackendEntry`` carrying its URL in ``.url`` (the
+    normal ``load()`` result). Ignoring the typed objects would drop every
+    configured endpoint and mis-route remote/lmstudio backends to localhost."""
     if config is None:
         return {}
     backends = _get(config, "backends", {})
-    if isinstance(backends, dict):
-        return {k: v for k, v in backends.items() if isinstance(v, str)}
-    return {}
+    if not isinstance(backends, dict):
+        return {}
+    out: dict = {}
+    for name, entry in backends.items():
+        if isinstance(entry, str):
+            out[name] = entry
+            continue
+        url = _get(entry, "url")
+        if isinstance(url, str) and url:
+            out[name] = url
+    return out
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:

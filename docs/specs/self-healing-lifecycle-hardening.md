@@ -45,8 +45,49 @@ sizing are lost the same way.
 - Test: promote populates a rollback with an lmstudio backend + loopback endpoint → the rollback
   candidate resolves with that backend/endpoint, not MLX inference.
 
+### H3 — Quarantine-aware role candidate selection in `complete()` (P1, review R5)
+
+`src/cheapskate/client.py` `complete()`: for a role request it seeds
+`candidates = [(None, role)]` (a live broker role-resolve) then extends with
+`role_candidates(role)[1:]`. When the incumbent is globally quarantined,
+`role_candidates()` has already dropped it, so `[1:]` drops the first eligible
+**fallback**, and the `(None, role)` live request resolves (via `resolve()`, which does
+NOT consult quarantine) straight back to the quarantined incumbent — serving the
+known-bad model and never trying the fallback.
+
+- Why deferred: the obvious fix (drive `complete()` off the full quarantine-aware
+  `role_candidates()` list by explicit model) **changes the client↔broker wire contract** —
+  the first request stops sending `model: "role:<name>"` (broker-authoritative live role
+  resolution) and sends a client-resolved concrete model instead. That is a deliberate design
+  decision (who owns role→model resolution, client or broker?) with test-contract impact, not a
+  convergence-loop patch. Needs a decision + careful test reconciliation.
+
+### H4 — Fail-closed served-model provenance on the explicit-model `generate_json` path (P1, review R5)
+
+`src/cheapskate/client.py` `generate_json(model=...)` (the non-role branch): parses and returns
+without the served-model identity check the role path enforces, so a backend-side fallback can
+satisfy an exact-model public call while its output is attributed to the requested model.
+
+- Why deferred: adding the check is correct but many existing explicit-model tests use a fixed
+  response model (`_chat_body` default `test-model`) that does not match the requested model, so
+  it churns a broad test surface. Belongs with a deliberate pass that updates those tests to serve
+  the requested identity (as the router/token-count tests already were).
+
+## Already shipped in the release (NOT deferred)
+
+- **R5-1 — env-proxy egress:** `never_cloud` now builds the httpx client with `trust_env=False`
+  (client `_post_chat`) and the broker's httpx client is `trust_env=False` (it only dials local
+  backends), so a private prompt cannot tunnel through an env-configured proxy despite a loopback
+  URL. Covered by tests.
+- **R5-4 — typed-config resolution:** `RoleEntry.endpoint` added and `_config_backends` reads
+  `BackendEntry.url`, so remote/lmstudio role candidates resolve to their real endpoint instead of
+  the Ollama localhost default. Covered by tests.
+
 ## Acceptance
 
 - A failed challenger never remains promoted; rollback is automatic and covered by a test.
 - A rollback candidate resolves with its stored backend/endpoint/size.
-- The public client behavior is unchanged (it does not wire this lifecycle).
+- `complete()` never serves a quarantined incumbent and never drops an eligible fallback.
+- The explicit-model `generate_json` path fails closed on a served-model mismatch.
+- The public client behavior is unchanged where not explicitly redesigned (wire-contract change in
+  H3 is a deliberate, documented decision).

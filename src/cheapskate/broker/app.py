@@ -417,7 +417,13 @@ def build_app(config: Any = None):
 
     SafeStreamingResponse = _streaming_response_cls()
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
+    # trust_env=False: the broker only ever dials LOCAL backends (ollama/mlx/
+    # lmstudio on loopback), so it must never inherit HTTP(S)_PROXY/ALL_PROXY and
+    # tunnel a prompt off the box — this is the broker-side half of the
+    # never_cloud proxy-egress guard (the client half is in client._post_chat).
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(600.0, connect=10.0), trust_env=False
+    )
 
     @asynccontextmanager
     async def lifespan(_app):

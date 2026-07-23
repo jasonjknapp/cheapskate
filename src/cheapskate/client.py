@@ -120,7 +120,12 @@ def _post_chat(
         "X-Model-Privacy": privacy,
     }
 
-    client = api or httpx.Client(timeout=timeout)
+    # never_cloud must not inherit HTTP(S)_PROXY/ALL_PROXY from the environment:
+    # even with a 127.0.0.1 URL, httpx's default trust_env would tunnel the
+    # private prompt + broker key through an env-configured proxy off the box.
+    client = api or httpx.Client(
+        timeout=timeout, trust_env=(privacy != "never_cloud")
+    )
     close = api is None
     try:
         resp = client.post(url, json=payload, headers=headers, timeout=timeout)
