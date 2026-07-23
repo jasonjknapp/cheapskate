@@ -18,7 +18,12 @@
 - **R3 (Sol, base main, on `a89c492`):** NOT clean — 2 P1 regressions the self-healing candidate filter introduced, both fixed at `c28f2cf` (419 pass, Ruff clean, +3 tests):
   - R3-1 [P1] an uninstalled Ollama incumbent under `machine.auto_pull` was filtered out (raise, no HTTP) instead of being gate-pulled → auto_pull candidates eligible again (allowance at the call site; `_candidate_installed` stays a pure probe).
   - R3-2 [P1] a custom role that declares no capabilities had every candidate filtered → undeclared caps now assumed to satisfy the required set; `RoleEntry` gains an optional `capabilities` field (Pydantic no longer strips it).
-- **R4:** running (fresh Sol, base main, on `c28f2cf`). Convergence trend: R1 5→R2 4→R3 2 findings, decreasing severity.
+- **R4 (Sol, base main, on `c28f2cf`):** NOT clean — 4 findings (3 P1, 1 minor). **Reviewer confirms the privacy gates are "substantially hardened"**; the remaining findings moved to the broader self-healing engine lifecycle:
+  - R4-1 [P1] string-return `complete=` adapters skip the identity check (production uses dicts → already fail-closed; string path is legacy/test, can't carry provenance — contract tension).
+  - R4-2 [P1] a promoted challenger that fails its first live invocation is not rolled back (engine `run()` has no rollback callback). **Latent: the public client does not wire `promote`/`discover` (client.py:521), so this lifecycle is not on the release surface.**
+  - R4-3 [P1] `role_candidates` resolves a rollback entry by model string only, losing stored backend/endpoint from `rollback_configs`. **Also only reachable once promotion populates rollbacks — not on the public client surface.**
+  - R4-4 [minor] `role_candidates` raises `backends.resolve.LocalUnavailable`, not `router.task.LocalUnavailable`, for a task referencing a missing role (trivial normalization; on the used path).
+- **ESCALATED to Jason at the round-4 budget (2026-07-23).** Convergence count 5→4→2→4 is not closing; the privacy CORE (the patch's purpose) is hardened, but the fresh lens keeps surfacing self-healing discovery/promote/rollback lifecycle issues that are largely NOT wired into the public client's flow. Decision needed on scope — see FOR-JASON.md. No further fixes/reviews until Jason directs.
 
 ## 📌 Current State
 

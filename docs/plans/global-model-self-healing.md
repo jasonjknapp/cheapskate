@@ -2,7 +2,8 @@
 current_phase: release-prep
 phase_status: in_progress
 last_commit:  c28f2cf4708af9a644aeaae26fc7ddf500cfcdbd
-next_action:  R1(5)+R2(4)+R3(2) findings all fixed (419 pass, Ruff clean). R4 fresh review running on c28f2cf. If R4 clean, need one more clean for the 2-clean gate; if R4 finds more, escalate to Jason (round-4 budget) with the converging trend.
+phase_status: escalated_round4
+next_action:  ESCALATED to Jason at round-4 budget. Privacy core hardened (R4 confirms); R4's 4 findings open (2 latent promote/rollback lifecycle P1s NOT wired into the public client, 1 trivial, 1 string-adapter contract tension). Awaiting Jason's scope decision (A ship privacy core / B keep converging / C pause) in FOR-JASON.md. No further fixes/reviews until directed.
 -->
 
 # Global Model Self-Healing
