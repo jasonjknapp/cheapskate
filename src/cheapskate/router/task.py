@@ -340,6 +340,7 @@ def _run_local(
     # max_retries repairs. ``retries`` is the number of repair attempts issued
     # after the first (attempts - 1), so a run that exhausts the budget reports
     # retries == max_retries, not max_retries + 1.
+    from ..backends.resolve import LocalUnavailable as ResolveLocalUnavailable
     from ..backends.resolve import role_candidates
     from .. import paths
     from ..contracts import FailureKind
@@ -348,9 +349,16 @@ def _run_local(
     attempts = 0
     compatibility = CompatibilityStore(paths.state_dir() / "model-job-compatibility.json")
     job_id = f"router:{task_type}"
+    try:
+        role_specs = role_candidates(role, config=config)
+    except ResolveLocalUnavailable as exc:
+        # Surface a missing/misconfigured role as THIS module's LocalUnavailable,
+        # the class the router's callers are documented to catch — not the
+        # resolver's identically-named internal exception.
+        raise LocalUnavailable(str(exc)) from exc
     candidates = [
         candidate
-        for candidate in role_candidates(role, config=config)
+        for candidate in role_specs
         if not compatibility.is_blocked(job_id, candidate.model)
     ]
     if not candidates:
@@ -402,6 +410,13 @@ def _run_local(
                             f"requested {candidate.model!r} but broker served "
                             f"{served_model!r}"
                         )
+                # A bare-string completion carries no provenance and only comes
+                # from a legacy/injected `complete=` adapter (the production path
+                # returns a dict, verified above). Such an adapter is called with
+                # model=candidate.model and has no broker indirection to mask a
+                # hidden fallback, so it is a TRUSTED-model contract: the caller is
+                # responsible for serving the model it was asked for. Provenance
+                # enforcement lives on the dict (real backend) path.
             except Exception as exc:  # noqa: BLE001 — classified recovery attempt
                 error_kind = attempt_error = type(exc).__name__
                 feedback = f"model call failed: {error_kind}"

@@ -149,6 +149,25 @@ def test_local_job_repairs_then_switches_to_role_fallback():
     ]
 
 
+def test_missing_role_normalizes_to_router_local_unavailable(monkeypatch):
+    """When role resolution raises the resolver's internal LocalUnavailable, the
+    router surfaces its OWN LocalUnavailable — the class callers are documented to
+    catch — not the resolver's identically-named internal exception."""
+    import sys
+
+    import cheapskate.backends.resolve  # noqa: F401 — ensure the submodule is loaded
+    _resolve = sys.modules["cheapskate.backends.resolve"]
+
+    def boom(*_a, **_k):
+        raise _resolve.LocalUnavailable("role 'ghost' has no model configured")
+
+    monkeypatch.setattr(_resolve, "role_candidates", boom)
+    cfg = Config()
+    with pytest.raises(task.LocalUnavailable):
+        task.run("summarize", "crit", "data", cfg, dial=(2, "std"),
+                 complete=lambda *a, **k: _envelope("x"))
+
+
 def test_exhausted_local_run_attributes_to_last_model_tried():
     """When every candidate exhausts, the run's error/model must name the last
     model actually attempted (the fallback), not the incumbent it started on."""
