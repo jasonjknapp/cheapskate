@@ -460,7 +460,7 @@ def build_app(config: Any = None):
         host = request.client.host if request.client else ""
         return host in ("127.0.0.1", "::1", "localhost")
 
-    async def _proxy_generation(request, path, *, embed=False):
+    async def _proxy_generation(request, path, *, embed=False, privacy_override=None):
         cls, user = _auth(request)
         if not cls:
             return JSONResponse({"error": "invalid or missing API key"}, status_code=401)
@@ -480,7 +480,9 @@ def build_app(config: Any = None):
             return JSONResponse(
                 {"error": f"model resolution failed: {e}"}, status_code=400
             )
-        privacy = request.headers.get("x-model-privacy", "cloud_allowed")
+        # A never_cloud task-type policy (or the client header) forces never_cloud
+        # even when the resolved role/model would otherwise reach a remote endpoint.
+        privacy = privacy_override or request.headers.get("x-model-privacy", "cloud_allowed")
         if privacy not in {"never_cloud", "cloud_allowed"}:
             return JSONResponse({"error": "invalid privacy constraint"}, status_code=400)
         if privacy == "never_cloud" and not _never_cloud_spec_is_local(spec):
@@ -695,7 +697,16 @@ def build_app(config: Any = None):
         # local / unknown → proxy locally, pinning the route's role when known.
         if plan.get("model") and not body.get("model"):
             body["model"] = plan["model"]
-        return await _proxy_generation(_RequestWithBody(request, body), "/chat/completions")
+        # A task_type declared never_cloud in config is forced local at this dial,
+        # but the pinned role (or a request-supplied model override) can still
+        # resolve to a remote registry endpoint. Enforce never_cloud from the
+        # policy regardless of whether the client sent the header.
+        never_cloud_task = task_type in (_get(config, "never_cloud", []) or [])
+        override = "never_cloud" if (never_cloud_task or privacy == "never_cloud") else None
+        return await _proxy_generation(
+            _RequestWithBody(request, body), "/chat/completions",
+            privacy_override=override,
+        )
 
     @app.post("/v1/embeddings")
     async def embeddings(request: Request):

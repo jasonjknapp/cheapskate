@@ -182,12 +182,15 @@ def complete(
     start = time.monotonic()
     candidates = [(model, role)]
     if role and model is None:
-        from .backends.resolve import role_candidates
+        from .backends.resolve import LocalUnavailable, role_candidates
 
-        candidates.extend(
-            (candidate.model, None)
-            for candidate in role_candidates(role, config=config)[1:]
-        )
+        try:
+            role_specs = role_candidates(role, config=config)[1:]
+        except LocalUnavailable as exc:
+            # Honor the public contract: an unknown/misconfigured role surfaces as
+            # CheapskateUnavailable, not the internal resolver exception.
+            raise CheapskateUnavailable(str(exc)) from exc
+        candidates.extend((candidate.model, None) for candidate in role_specs)
 
     body = None
     text = None
@@ -288,7 +291,12 @@ def _validate_raw_schema(value: Any, schema: dict, path: str = "$") -> Any:
 
 
 def _candidate_installed(spec: Any) -> bool:
-    """Probe actual local installation state without downloading anything."""
+    """Probe actual local installation state without downloading anything.
+
+    Only Ollama and MLX have a downloadable local artifact to probe. Server-backed
+    engines (lmstudio, remote) have nothing to install — the model is either being
+    served or not, which the invoke path verifies at request time — so they must
+    count as available here rather than being filtered out of role candidacy."""
     if spec.backend == "ollama":
         from .backends.ollama import ollama_model_present
         return ollama_model_present(spec.model)
@@ -296,6 +304,8 @@ def _candidate_installed(spec: Any) -> bool:
         hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
         dirname = "models--" + spec.model.replace("/", "--")
         return (hf_home / "hub" / dirname).is_dir()
+    if spec.backend in {"lmstudio", "remote"}:
+        return True
     return False
 
 
@@ -413,7 +423,11 @@ def generate_json(
 
     if role and model is None:
         from . import paths
-        from .backends.resolve import role_candidates, role_capabilities
+        from .backends.resolve import (
+            LocalUnavailable,
+            role_candidates,
+            role_capabilities,
+        )
         from .contracts import JobContract
         from .self_healing import (
             Candidate,
@@ -433,6 +447,11 @@ def generate_json(
             quality_floor=quality_floor,
             privacy=privacy,
         )
+        try:
+            role_specs = role_candidates(role, config=config)
+        except LocalUnavailable as exc:
+            # Public contract: a bad role surfaces as CheapskateUnavailable.
+            raise CheapskateUnavailable(str(exc)) from exc
         installed = [
             Candidate(
                 spec.model,
@@ -441,7 +460,7 @@ def generate_json(
                 installed=_candidate_installed(spec),
                 local=_serving_spec_is_local(spec),
             )
-            for spec in role_candidates(role, config=config)
+            for spec in role_specs
         ]
         engine = SelfHealingEngine(compatibility=CompatibilityStore(
             paths.state_dir() / "model-job-compatibility.json"

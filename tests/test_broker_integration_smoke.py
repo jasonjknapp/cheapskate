@@ -194,6 +194,44 @@ def test_never_cloud_rechecks_prepared_endpoint_not_just_spec(client, monkeypatc
     assert len(client._fake.seen) == before  # nothing left the box
 
 
+def test_never_cloud_task_policy_enforced_without_header(monkeypatch):
+    """A task_type declared never_cloud in config is forced local, but its pinned
+    role can still resolve remote. The policy must enforce never_cloud even when
+    the client sends no X-Model-Privacy header."""
+    cfg = _config_with_role()
+    object.__setattr__(cfg, "never_cloud", ["secrets"])
+    _register_key(cfg)
+    monkeypatch.setattr(broker_app, "enforce_capacity", lambda spec, budget: ("ok", "t"))
+    monkeypatch.setattr(
+        broker_app, "prepare_backend",
+        lambda spec, budget, config=None: "http://backend.test/v1",
+    )
+    monkeypatch.setattr(
+        broker_app, "plan_task_type_route",
+        lambda cfg, tt, **_k: {"action": "local",
+                               "decision": {"role": "reasoning"},
+                               "model": "role:reasoning"},
+    )
+    # The pinned role resolves to a REMOTE endpoint despite the local plan.
+    remote = broker_app.BackendSpec(
+        model="remote", backend="remote", endpoint="https://models.example.com/v1",
+    )
+    monkeypatch.setattr(broker_app, "resolve", lambda **_k: remote)
+
+    app = broker_app.build_app(cfg)
+    fake = _FakeBackendClient({"model": "remote", "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "x"}}]})
+    app.state.client = fake
+    tc = TestClient(app)
+    r = tc.post(
+        "/v1/chat/completions",
+        json={"model": "role:reasoning", "task_type": "secrets", "messages": []},
+        headers={"Authorization": "Bearer sk-test"},  # no X-Model-Privacy
+    )
+    assert r.status_code == 422
+    assert fake.seen == []  # nothing left the box
+
+
 def test_models_endpoint_rejects_missing_key_401_not_422(client):
     r = client.get("/v1/models")
     # The S3 bug made this 422 (FastAPI treated `request` as a missing query

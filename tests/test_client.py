@@ -325,6 +325,41 @@ def test_generate_json_role_rejects_served_model_mismatch(registered_key, monkey
         )
 
 
+def test_generate_json_keeps_lmstudio_role_candidate_eligible(
+    registered_key, monkeypatch
+):
+    """A loopback LM Studio role must not be filtered out of candidacy — it has no
+    downloadable artifact to probe, so _candidate_installed must count it present."""
+    cfg = {"roles": {"classification": {
+        "model": "lmstudio-model", "backend": "lmstudio",
+        "endpoint": "http://127.0.0.1:1234/v1",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body('{"ok": true}', model="lmstudio-model")),
+    ])
+    out = client.generate_json(
+        "q", role="classification", config=cfg, api=api,
+        required_capabilities={"classification", "json"}, retries=0,
+        privacy="never_cloud",
+    )
+    assert out == {"ok": True}
+    assert len(api.requests) == 1  # it made the HTTP call, not NoCompatibleModel
+
+
+def test_complete_unknown_role_raises_public_exception(registered_key):
+    """complete() must surface an unknown role as the public CheapskateUnavailable,
+    not the internal resolver LocalUnavailable."""
+    with pytest.raises(client.CheapskateUnavailable):
+        client.complete("q", role="does-not-exist", config={"roles": {}})
+
+
+def test_generate_json_unknown_role_raises_public_exception(registered_key):
+    with pytest.raises(client.CheapskateUnavailable):
+        client.generate_json("q", role="does-not-exist", config={"roles": {}},
+                             privacy="cloud_allowed", retries=0)
+
+
 def test_generate_json_rejects_undeclared_requested_capability(registered_key, monkeypatch):
     cfg = {"roles": {"classification": {
         "model": "text-only:latest", "backend": "ollama",

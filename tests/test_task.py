@@ -168,6 +168,33 @@ def test_exhausted_local_run_attributes_to_last_model_tried():
     assert res["model"] == "fallback:latest"
 
 
+def test_mixed_quality_then_transport_failure_does_not_cross_attribute_output():
+    """Incumbent produces output that fails verify, then the fallback fails to
+    return content: the exhausted result must NOT claim the fallback model
+    produced the incumbent's output (last_env must reset per candidate)."""
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }})
+
+    def complete(prompt, system=None, role=None, model=None):
+        if model == "org/incumbent":
+            return _envelope("incumbent-said-this")
+        raise RuntimeError("fallback transport down")
+
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=complete,
+        verify=lambda out, crit: (False, "reject"),
+        max_retries=0,
+    )
+    assert res["ok"] is False
+    assert res["model"] == "fallback:latest"
+    assert res["output"] != "incumbent-said-this"  # no cross-model attribution
+    assert res["output"] is None
+
+
 def test_local_job_rejects_broker_model_identity_mismatch():
     cfg = Config(roles={"reasoning": {
         "model": "org/incumbent", "backend": "mlx",

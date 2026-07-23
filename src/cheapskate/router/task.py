@@ -365,8 +365,11 @@ def _run_local(
     selected_model = candidates[0].model
     for candidate_index, candidate in enumerate(candidates):
         # Track the model actually attempted so a fully-exhausted run attributes
-        # its error/output to the last candidate tried, not the incumbent.
+        # its error/output to the last candidate tried, not the incumbent. Reset
+        # last_env too: a transport failure on this candidate must not leave the
+        # PRIOR candidate's output attributed to this model.
         selected_model = candidate.model
+        last_env = {"output": None, "self_confidence": None, "criteria_met": None}
         feedback = None
         for candidate_attempt in range(max_retries + 1):
             attempts += 1
