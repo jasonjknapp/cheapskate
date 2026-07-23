@@ -1,9 +1,8 @@
 <!-- PLAN-STATE v1 -->
 current_phase: release-prep
-phase_status: in_progress
-last_commit:  91259e7d9c31282965a5a854557605ebefbd07fa
 phase_status: reescalated_round5
-next_action:  JASON chose SCOPE A. Scope-A cleanup done at a549fd9 (420 pass, Ruff clean): R4-4 fixed, R4-1 documented, lifecycle findings deferred to docs/specs/self-healing-lifecycle-hardening.md. R5 scoped review running; need R5+R6 clean → push + PR → STOP at exit gate.
+last_commit:  91259e7d9c31282965a5a854557605ebefbd07fa
+next_action:  RE-ESCALATED after R5 (5 rounds, 23 findings, 2 self-inflicted regressions). Safe R5 fixes shipped at 91259e7 (env-proxy egress + typed-config resolution; 424 pass, Ruff clean). Deferred H1-H4 to docs/specs/self-healing-lifecycle-hardening.md. Recommendation: PAUSE the release convergence, move remaining hardening to a spec-gated effort. Awaiting Jason's call.
 -->
 
 # Global Model Self-Healing
