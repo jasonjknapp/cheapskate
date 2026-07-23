@@ -10,7 +10,12 @@
   - F4 [P1-major] router accepted missing provenance (complete substituted requested model) → fails closed on missing/mismatched `served_model`.
   - F5 [minor] exhausted run attributed to incumbent → now attributes to the last model tried.
   - Tests added: F1/F2 (broker smoke), F3 (client), F5 (task); F4 covered by updated token-count + existing mismatch tests.
-- **R2:** running (fresh Sol, base main, on `b80377e`).
+- **R2 (Sol, base main, on `b80377e`):** NOT clean — 4 findings, ALL fixed at `a89c492` (416 pass, Ruff clean, +5 tests):
+  - R2-1 [P1] a config-policy `never_cloud` task_type forced local could still egress if its pinned role resolved remote and the header was absent → broker threads a `privacy_override` so the policy enforces `never_cloud` header-free.
+  - R2-2 [major] a quality-then-transport failure cross-attributed the incumbent's output to the fallback (regression from R1's F5) → router resets `last_env` per candidate.
+  - R2-3 [major] `_candidate_installed` filtered out lmstudio/remote role candidates → now eligible (no downloadable artifact; reachability checked at invoke).
+  - R2-4 [minor] unknown role raised internal `LocalUnavailable` → normalized to public `CheapskateUnavailable` in `complete()` + `generate_json()`.
+- **R3:** running (fresh Sol, base main, on `a89c492`). Need R3 + R4 both clean for the 2-clean gate.
 
 ## 📌 Current State
 
