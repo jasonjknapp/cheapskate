@@ -69,7 +69,7 @@ def test_verify_repair_then_succeed():
     cfg = Config()
     attempts = []
 
-    def complete(prompt, system=None, role=None):
+    def complete(prompt, system=None, role=None, model=None):
         attempts.append(prompt)
         return _envelope("attempt")
 
@@ -93,7 +93,7 @@ def test_escalates_after_two_retries():
     cfg = Config()
     n = {"complete": 0}
 
-    def complete(prompt, system=None, role=None):
+    def complete(prompt, system=None, role=None, model=None):
         n["complete"] += 1
         return _envelope("nope")
 
@@ -118,6 +118,117 @@ def test_model_exception_is_a_repairable_attempt_then_escalates():
                    max_retries=2)
     assert res["escalated"] is True
     assert res["ok"] is False
+
+
+def test_local_job_repairs_then_switches_to_role_fallback():
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }})
+    calls = []
+
+    def complete(prompt, system=None, role=None, model=None):
+        calls.append((role, model))
+        if model == "org/incumbent":
+            return _envelope("bad")
+        return _envelope("good")
+
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=complete,
+        verify=lambda out, crit: (out == "good", "quality floor"),
+        max_retries=1,
+    )
+    assert res["ok"] is True
+    assert res["model"] == "fallback:latest"
+    assert calls == [
+        (None, "org/incumbent"),
+        (None, "org/incumbent"),
+        (None, "fallback:latest"),
+    ]
+
+
+def test_missing_role_normalizes_to_router_local_unavailable(monkeypatch):
+    """When role resolution raises the resolver's internal LocalUnavailable, the
+    router surfaces its OWN LocalUnavailable — the class callers are documented to
+    catch — not the resolver's identically-named internal exception."""
+    import sys
+
+    import cheapskate.backends.resolve  # noqa: F401 — ensure the submodule is loaded
+    _resolve = sys.modules["cheapskate.backends.resolve"]
+
+    def boom(*_a, **_k):
+        raise _resolve.LocalUnavailable("role 'ghost' has no model configured")
+
+    monkeypatch.setattr(_resolve, "role_candidates", boom)
+    cfg = Config()
+    with pytest.raises(task.LocalUnavailable):
+        task.run("summarize", "crit", "data", cfg, dial=(2, "std"),
+                 complete=lambda *a, **k: _envelope("x"))
+
+
+def test_exhausted_local_run_attributes_to_last_model_tried():
+    """When every candidate exhausts, the run's error/model must name the last
+    model actually attempted (the fallback), not the incumbent it started on."""
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }})
+
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=lambda *a, **k: _envelope("bad"),
+        verify=lambda out, crit: (False, "never good"),
+        max_retries=0,
+    )
+    assert res["ok"] is False
+    assert res["model"] == "fallback:latest"
+
+
+def test_mixed_quality_then_transport_failure_does_not_cross_attribute_output():
+    """Incumbent produces output that fails verify, then the fallback fails to
+    return content: the exhausted result must NOT claim the fallback model
+    produced the incumbent's output (last_env must reset per candidate)."""
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+    }})
+
+    def complete(prompt, system=None, role=None, model=None):
+        if model == "org/incumbent":
+            return _envelope("incumbent-said-this")
+        raise RuntimeError("fallback transport down")
+
+    res = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=complete,
+        verify=lambda out, crit: (False, "reject"),
+        max_retries=0,
+    )
+    assert res["ok"] is False
+    assert res["model"] == "fallback:latest"
+    assert res["output"] != "incumbent-said-this"  # no cross-model attribution
+    assert res["output"] is None
+
+
+def test_local_job_rejects_broker_model_identity_mismatch():
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent", "backend": "mlx",
+    }})
+
+    result = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=lambda *a, **k: {
+            "text": _envelope("looks valid"), "model": "hidden-fallback",
+        },
+        verify=lambda out, crit: (True, ""), max_retries=0,
+    )
+    assert result["ok"] is False
+    assert result["model"] == "org/incumbent"
+    assert result["error_kind"] == "LocalUnavailable"
 
 
 def test_exhausted_local_run_emits_exactly_one_escalated_generation(monkeypatch):

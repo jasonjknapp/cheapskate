@@ -19,6 +19,14 @@ MLX_HOST = "127.0.0.1"
 MLX_PORT = 8080
 MLX_VLM_PORT = 8081
 
+DEFAULT_ROLE_CAPABILITIES = {
+    "reasoning": frozenset({"text", "reasoning", "json", "coach", "long-context"}),
+    "code": frozenset({"text", "code", "json"}),
+    "classification": frozenset({"text", "classification", "json"}),
+    "creative": frozenset({"text", "creative"}),
+    "vision": frozenset({"vision", "json"}),
+}
+
 
 class LocalUnavailable(Exception):
     """A local backend could not serve the request (down/missing/over-budget).
@@ -71,13 +79,26 @@ def default_endpoint(backend: str, config: Any = None) -> str:
 
 
 def _config_backends(config: Any) -> dict:
-    """The ``backends`` endpoint map from config, or {} if unset. Never raises."""
+    """The ``backends`` endpoint map from config, or {} if unset. Never raises.
+
+    Accepts both a plain ``{backend: url_str}`` dict AND the typed Config shape
+    where each value is a ``BackendEntry`` carrying its URL in ``.url`` (the
+    normal ``load()`` result). Ignoring the typed objects would drop every
+    configured endpoint and mis-route remote/lmstudio backends to localhost."""
     if config is None:
         return {}
     backends = _get(config, "backends", {})
-    if isinstance(backends, dict):
-        return {k: v for k, v in backends.items() if isinstance(v, str)}
-    return {}
+    if not isinstance(backends, dict):
+        return {}
+    out: dict = {}
+    for name, entry in backends.items():
+        if isinstance(entry, str):
+            out[name] = entry
+            continue
+        url = _get(entry, "url")
+        if isinstance(url, str) and url:
+            out[name] = url
+    return out
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -200,6 +221,32 @@ def resolve(
                 quant=_get(spec, "quant"),
             )
 
+    # A retained rollback snapshot carries the deposed incumbent's TRUE backend,
+    # endpoint, and size (registry.promote writes rollback_configs). Honor it
+    # before string inference so a former lmstudio ``vendor/model`` is not
+    # mis-inferred as MLX (losing its endpoint). A live incumbent match above
+    # always wins (stale metadata never shadows live state); first matching role
+    # in table order wins. The snapshot carries the same local-state trust as a
+    # role ``endpoint`` field and flows through every existing never_cloud gate.
+    for rname, spec in roles.items():
+        snapshots = _get(spec, "rollback_configs")
+        if not isinstance(snapshots, dict):
+            continue
+        snap = snapshots.get(model)
+        if not isinstance(snap, dict):
+            continue
+        snap_backend = _get(snap, "backend")
+        if not snap_backend:
+            continue
+        return BackendSpec(
+            model=model,
+            backend=snap_backend,
+            endpoint=_get(snap, "endpoint") or default_endpoint(snap_backend, config),
+            approx_gb=_get(snap, "approx_gb"),
+            role=rname,
+            quant=_get(snap, "quant"),
+        )
+
     backend = infer_backend(model)
     return BackendSpec(
         model=model,
@@ -209,6 +256,51 @@ def resolve(
         role=None,
         quant=None,
     )
+
+
+def role_candidates(role: str, *, config: Any = None) -> list[BackendSpec]:
+    """Ordered compatible serving choices for a role.
+
+    The registry owns this order: incumbent, fallback, then retained rollback.
+    Job/model quarantines live one layer above this function; this list only
+    removes the role's global known-bad entries and duplicates.
+    """
+
+    role_entry = _roles(config).get(role)
+    if role_entry is None or not _get(role_entry, "model"):
+        raise LocalUnavailable(f"role {role!r} has no model configured")
+    quarantined = set(_get(role_entry, "quarantine", []) or [])
+    ordered = [
+        _get(role_entry, "model"),
+        _get(role_entry, "fallback"),
+        *(_get(role_entry, "rollback", []) or []),
+    ]
+    out: list[BackendSpec] = []
+    seen: set[str] = set()
+    incumbent = ordered[0]
+    for model in ordered:
+        if not model or model in seen or model in quarantined:
+            continue
+        seen.add(model)
+        if model == incumbent:
+            out.append(resolve(role=role, config=config))
+            continue
+        # Match the broker's explicit-model resolution exactly. A fallback name
+        # may be registered by another role with remote/cloud metadata; inferring
+        # it locally here would split the privacy decision from the actual route.
+        out.append(resolve(model=model, config=config))
+    return out
+
+
+def role_capabilities(role: str, *, config: Any = None) -> frozenset[str]:
+    """Capabilities declared by role policy, never inferred from a caller request."""
+    entry = _roles(config).get(role) or {}
+    declared = _get(entry, "capabilities")
+    if declared is None:
+        return DEFAULT_ROLE_CAPABILITIES.get(role, frozenset())
+    if not isinstance(declared, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(item) for item in declared if item)
 
 
 def port_of(spec: BackendSpec, default: int = MLX_PORT) -> int:

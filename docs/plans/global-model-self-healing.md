@@ -1,0 +1,91 @@
+<!-- PLAN-STATE v1 -->
+current_phase: release-prep
+phase_status: reescalated_round5
+last_commit:  91259e7d9c31282965a5a854557605ebefbd07fa
+next_action:  RE-ESCALATED after R5 (5 rounds, 23 findings, 2 self-inflicted regressions). Safe R5 fixes shipped at 91259e7 (env-proxy egress + typed-config resolution; 424 pass, Ruff clean). Deferred H1-H4 to docs/specs/self-healing-lifecycle-hardening.md. Recommendation: PAUSE the release convergence, move remaining hardening to a spec-gated effort. Awaiting Jason's call.
+-->
+
+# Global Model Self-Healing
+
+## Why
+
+> **User goal (2026-07-21):** "Jobs should be model independent to the degree reasonable. Substituting a different model should still work. If it is truely incompatible, can the job switch to an installed model that will work or ask the orchestrator to install a compatibel model and use that? These jobs should be self healing"
+
+> **User goal (2026-07-21):** "I would like it to be fully autonomous, but it should notify me. Preapproved would mean a fixed, and therefore outdated list. It should find the latest top rated models with a strong recency of release bias and pick the best for the job from those."
+
+> **User goal (2026-07-21):** "Agree with your recommendation. But older / least recently used models should be automatically deleted to make space"
+
+> **User goal (2026-07-21):** "latency or resource use are not nearly as important as quality as long as it runs on this machine,"
+
+> **User goal (2026-07-21):** "I'd just implement globably. The risk is low. And there's a real risk of losing track and not globablizing this later if we dont get it done now."
+
+> **User goal (2026-07-21):** "Make sure you understand the orchestrator and relevant jobs so that the end result if a well functioning system. The public cheapskate should get updated as well"
+
+> **User correction (2026-07-21):** "Requiring proof the model can be downloaded again creates a fail state where outdated models clog up the filesystem. I would not require that."
+
+## Scope
+
+This plan covers the public Cheapskate product. The machine-specific agent-workflows implementation cites this contract and adds its scheduled-job inventory, launchd integration, daily-brief repairs, and notification delivery without duplicating the public design.
+
+## Locked design
+
+1. Jobs declare capabilities, output contracts, quality gates, deadlines, and privacy requirements. They never depend on a concrete model name.
+2. Runtime recovery classifies transport, availability, timeout, schema, safety, source-data, and quality failures separately.
+3. Recovery attempts bounded repair, then a proven compatible installed model, then autonomous discovery, install, canary evaluation, and promotion.
+4. Discovery has no fixed model or publisher catalog. Current popularity, benchmark evidence, and release recency nominate challengers; local job-specific evaluation decides promotion.
+5. Quality dominates ranking. Latency and resource use are tie-breakers after machine fit and delivery constraints.
+6. The scheduler learns runtime, starts work earlier, and may use a bounded late-delivery window rather than silently lower quality.
+7. Incumbent, active challenger, in-use models, and one rollback per role are protected. Other managed models are removed by role-aware least-recently-used eviction; upstream availability is never a deletion gate.
+8. Overrides expire into a fresh selection pass; they never revert blindly to an older model. Candidate quarantines are scoped and expire.
+9. Failed recovery and rollback notify immediately. Successful installs, promotions, schedule changes, and pruning are summarized.
+10. Existing callers remain source-compatible while the global job inventory migrates.
+
+## Phases
+
+### Public core
+
+- Job contracts and failure taxonomy.
+- Compatibility history and candidate ordering.
+- Contract-aware text and structured-output recovery.
+- Dynamic candidate discovery and quality-first ranking.
+- Guarded installation, promotion, rollback, quarantine, and protected LRU pruning.
+- CLI, configuration, documentation, and deterministic tests.
+
+### Machine orchestrator
+
+- Port the public primitives into the canonical agent broker/manager where machine-specific lifecycle control lives.
+- Migrate every production `local_llm`, `local_ai`, and `local_task` consumer.
+- Remove arbitrary cross-role direct fallback.
+- Add job-specific canaries, runtime learning, notification aggregation, and launch scheduling.
+
+### Current incident closure
+
+- Sara coach: distinguish successful generation rejected by safety rails from an unavailable model; use only coach-compatible fallbacks.
+- Discord: treat repeated schema violations as incompatibility and change models rather than repeating the same failure.
+- JJacked improvement pass: reject or normalize wrong top-level JSON types without throwing.
+- Repair the independent AI Requests timeout and Atlas deploy failures at their actual orchestration boundaries.
+- Verify a clean dry-run briefing and the next scheduled production run.
+
+### Release
+
+- Run each repository's `/release-prep` independently.
+- Merge and deploy only through `/release-prod` after its entry gates pass.
+- Update the public package, repository documentation, and jknapp.com article to match verified behavior.
+
+## Acceptance
+
+- Replacing a role incumbent with any contract-compatible installed model requires no job-code change.
+- Schema/safety incompatibility triggers a different compatible model, not three identical retries or an outage label.
+- No installed compatible model triggers autonomous guarded discovery, installation, local canaries, and selection.
+- A failed challenger cannot displace the incumbent; rollback is automatic and protected.
+- Disk pressure evicts unprotected, least-recently-used eligible models even if an upstream source has disappeared.
+- Every model-backed scheduled job is inventoried, contract-bound, and covered by deterministic failure simulation.
+- The daily brief reports accurate causes and contains no current model-related failure.
+- Public Cheapskate exposes and documents the same core behavior with a green full suite.
+
+## 2026-07-23 release handoff
+
+- Branch/worktree: `feature/model-self-healing` at `/Users/jason/dev/Personal/.worktrees/cheapskate/model-self-healing`; committed head `2d3af4b` (privacy/attribution patch committed). No PR/push/merge/deploy occurred.
+- The patch standardizes `X-Model-Privacy: never_cloud`, makes the broker reject a non-local result after its own live resolution, and makes each local recovery attempt request the exact candidate model and reject a mismatched rich response model.
+- Focused suite `70 passed`; full suite `407 passed`; Ruff clean. The four documented failures are fixed: `generate_json()` raises the explicit verified-local-backend refusal for an all-nonlocal role (`_never_cloud_role_has_local_candidate`), and the two injected `tests/test_task.py` callbacks accept `model=None`.
+- Paired machine release: `/Users/jason/dev/.worktrees/agent-workflows/global-model-self-healing`, committed `6e4a2ba` (green: 2530 unittests OK, boundary check passes). Atlas branch `fix/atlas-stash-conflict-recovery` at `35a5477` has no present worktree and must be reconciled separately with `origin/main`/`origin/release` `237889a`.

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 # ``Request`` must be resolvable in THIS module's globals at route-registration
 # time: with ``from __future__ import annotations`` a route's ``request: Request``
@@ -58,6 +59,7 @@ DEFAULT_HOST = "127.0.0.1"
 # and return EMPTY content; floor any chat request that OMITS max_tokens so a
 # thinking model has room to think AND answer. Explicit values are respected.
 DEFAULT_MAX_TOKENS_FLOOR = 4096
+_LOCAL_SERVING_BACKENDS = frozenset({"ollama", "mlx", "mlx_vlm", "lmstudio"})
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -66,6 +68,23 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _url_host_is_local(url: Any) -> bool:
+    """Loopback check on a concrete URL — the endpoint actually dispatched to,
+    which may differ from the pre-check spec after backend preparation."""
+    try:
+        host = urlparse(str(url or "")).hostname
+    except ValueError:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _never_cloud_spec_is_local(spec: BackendSpec) -> bool:
+    return (
+        spec.backend in _LOCAL_SERVING_BACKENDS
+        and _url_host_is_local(spec.endpoint)
+    )
 
 
 def _broker_cfg(config: Any) -> dict:
@@ -398,7 +417,13 @@ def build_app(config: Any = None):
 
     SafeStreamingResponse = _streaming_response_cls()
 
-    client = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
+    # trust_env=False: the broker only ever dials LOCAL backends (ollama/mlx/
+    # lmstudio on loopback), so it must never inherit HTTP(S)_PROXY/ALL_PROXY and
+    # tunnel a prompt off the box — this is the broker-side half of the
+    # never_cloud proxy-egress guard (the client half is in client._post_chat).
+    client = httpx.AsyncClient(
+        timeout=httpx.Timeout(600.0, connect=10.0), trust_env=False
+    )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -441,7 +466,7 @@ def build_app(config: Any = None):
         host = request.client.host if request.client else ""
         return host in ("127.0.0.1", "::1", "localhost")
 
-    async def _proxy_generation(request, path, *, embed=False):
+    async def _proxy_generation(request, path, *, embed=False, privacy_override=None):
         cls, user = _auth(request)
         if not cls:
             return JSONResponse({"error": "invalid or missing API key"}, status_code=401)
@@ -460,6 +485,16 @@ def build_app(config: Any = None):
         except Exception as e:  # noqa: BLE001
             return JSONResponse(
                 {"error": f"model resolution failed: {e}"}, status_code=400
+            )
+        # A never_cloud task-type policy (or the client header) forces never_cloud
+        # even when the resolved role/model would otherwise reach a remote endpoint.
+        privacy = privacy_override or request.headers.get("x-model-privacy", "cloud_allowed")
+        if privacy not in {"never_cloud", "cloud_allowed"}:
+            return JSONResponse({"error": "invalid privacy constraint"}, status_code=400)
+        if privacy == "never_cloud" and not _never_cloud_spec_is_local(spec):
+            return JSONResponse(
+                {"error": "never_cloud route is not a verified local backend"},
+                status_code=422,
             )
 
         # Thinking-model floor: a chat request that omits max_tokens would inherit
@@ -534,6 +569,20 @@ def build_app(config: Any = None):
             except LocalUnavailable as e:
                 _emit_serve(False, status_code=503, error=str(e))
                 return JSONResponse({"error": str(e)}, status_code=503)
+
+            # never_cloud is verified again against the ACTUAL prepared base URL,
+            # not just the pre-check spec: prepare_backend re-resolves the role
+            # through ensure_role, so a registry change between the check above and
+            # here (or an MLX endpoint assigned during load) could yield a
+            # non-loopback target. Fail closed before the prompt leaves the box.
+            if privacy == "never_cloud" and not _url_host_is_local(base):
+                _emit_serve(False, status_code=422,
+                            error="never_cloud prepared endpoint is not local")
+                return JSONResponse(
+                    {"error": "never_cloud prepared endpoint is not local",
+                     "model": spec.model, "backend": spec.backend},
+                    status_code=422,
+                )
 
             payload["model"] = spec.model
             url = base + path
@@ -619,6 +668,10 @@ def build_app(config: Any = None):
         via the cloud adapter and returned in OpenAI shape; a local route is
         proxied to the local backend. Safety classes fail closed with a clear
         HTTP status."""
+        privacy = request.headers.get("x-model-privacy", "cloud_allowed")
+        if privacy not in {"never_cloud", "cloud_allowed"}:
+            return JSONResponse({"error": "invalid privacy constraint"}, status_code=400)
+
         plan = plan_task_type_route(config, task_type)
         action = plan["action"]
 
@@ -626,6 +679,18 @@ def build_app(config: Any = None):
             _log("generation", task_type=task_type, route="refused", user=user,
                  ok=False, error=plan["class"], status_code=plan["status"])
             return JSONResponse({"error": plan["error"]}, status_code=plan["status"])
+
+        # never_cloud must never take the cloud dispatch, even when the dial would
+        # otherwise route this task_type to cloud. The local-proxy branch below
+        # re-verifies privacy in _proxy_generation; only the cloud branch needs an
+        # explicit refusal here.
+        if action == "cloud" and privacy == "never_cloud":
+            _log("generation", task_type=task_type, route="refused", user=user,
+                 ok=False, error="never_cloud forbids a cloud route", status_code=422)
+            return JSONResponse(
+                {"error": "never_cloud route is not a verified local backend"},
+                status_code=422,
+            )
 
         if action == "cloud":
             status, out = await asyncio.to_thread(
@@ -638,7 +703,16 @@ def build_app(config: Any = None):
         # local / unknown → proxy locally, pinning the route's role when known.
         if plan.get("model") and not body.get("model"):
             body["model"] = plan["model"]
-        return await _proxy_generation(_RequestWithBody(request, body), "/chat/completions")
+        # A task_type declared never_cloud in config is forced local at this dial,
+        # but the pinned role (or a request-supplied model override) can still
+        # resolve to a remote registry endpoint. Enforce never_cloud from the
+        # policy regardless of whether the client sent the header.
+        never_cloud_task = task_type in (_get(config, "never_cloud", []) or [])
+        override = "never_cloud" if (never_cloud_task or privacy == "never_cloud") else None
+        return await _proxy_generation(
+            _RequestWithBody(request, body), "/chat/completions",
+            privacy_override=override,
+        )
 
     @app.post("/v1/embeddings")
     async def embeddings(request: Request):

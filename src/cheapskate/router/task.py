@@ -294,7 +294,7 @@ def run(
     # route == LOCAL
     complete = complete or _default_complete()
     return _run_local(
-        task_type, criteria, payload, role, patience,
+        task_type, criteria, payload, role, patience, config,
         verify=verify, complete=complete, max_retries=max_retries, user=user,
     )
 
@@ -326,6 +326,7 @@ def _run_local(
     payload: str,
     role: str,
     patience: str,
+    config: Config,
     *,
     verify: VerifyFn | None,
     complete: CompleteFn,
@@ -339,56 +340,123 @@ def _run_local(
     # max_retries repairs. ``retries`` is the number of repair attempts issued
     # after the first (attempts - 1), so a run that exhausts the budget reports
     # retries == max_retries, not max_retries + 1.
+    from ..backends.resolve import LocalUnavailable as ResolveLocalUnavailable
+    from ..backends.resolve import role_candidates
+    from .. import paths
+    from ..contracts import FailureKind
+    from ..self_healing import CompatibilityStore
+
     attempts = 0
-    max_attempts = max_retries + 1
+    compatibility = CompatibilityStore(paths.state_dir() / "model-job-compatibility.json")
+    job_id = f"router:{task_type}"
+    try:
+        role_specs = role_candidates(role, config=config)
+    except ResolveLocalUnavailable as exc:
+        # Surface a missing/misconfigured role as THIS module's LocalUnavailable,
+        # the class the router's callers are documented to catch — not the
+        # resolver's identically-named internal exception.
+        raise LocalUnavailable(str(exc)) from exc
+    candidates = [
+        candidate
+        for candidate in role_specs
+        if not compatibility.is_blocked(job_id, candidate.model)
+    ]
+    if not candidates:
+        raise LocalUnavailable(
+            f"all role-compatible models are temporarily quarantined for {job_id!r}"
+        )
     feedback: str | None = None
     last_env: dict[str, Any] = {"output": None, "self_confidence": None, "criteria_met": None}
     ok = False
     error_kind: str | None = None
 
-    while attempts < max_attempts:
-        attempts += 1
+    selected_model = candidates[0].model
+    for candidate_index, candidate in enumerate(candidates):
+        # Track the model actually attempted so a fully-exhausted run attributes
+        # its error/output to the last candidate tried, not the incumbent. Reset
+        # last_env too: a transport failure on this candidate must not leave the
+        # PRIOR candidate's output attributed to this model.
+        selected_model = candidate.model
+        last_env = {"output": None, "self_confidence": None, "criteria_met": None}
+        feedback = None
+        for candidate_attempt in range(max_retries + 1):
+            attempts += 1
         # This is the terminal attempt when the run has spent its whole budget.
         # A local run that ends not-ok on its terminal attempt IS the escalation
         # (the caller must step up a tier), so exactly that one generation event
         # carries escalated=True; a run that succeeds earlier breaks the loop and
         # never reaches an escalated=True emission.
-        is_last = attempts >= max_attempts
-        attempt_started = time.monotonic()
-        prompt = _build_prompt(criteria, payload, feedback)
-        attempt_ok = False
-        attempt_error: str | None = None
-        try:
-            raw = complete(prompt, system=ENVELOPE_SYSTEM, role=role)
-        except Exception as exc:  # noqa: BLE001 — a model/backend failure is a repairable attempt
-            error_kind = attempt_error = type(exc).__name__
-            feedback = f"model call failed: {error_kind}"
-            _emit_generation(
-                task_type, "local", role, user,
-                retries=attempts - 1, escalated=is_last, ok=False,
-                duration_s=round(time.monotonic() - attempt_started, 3),
-                error_kind=attempt_error,
+            is_last = (
+                candidate_index == len(candidates) - 1
+                and candidate_attempt >= max_retries
             )
-            continue
-        last_env = _parse_envelope(_completion_text(raw))
-        tokens_in, tokens_out = _completion_tokens(raw)
-        if verify is None:
-            ok = attempt_ok = True
-        else:
-            accepted, fb = verify(_as_text(last_env["output"]), criteria)
-            if accepted:
+            attempt_started = time.monotonic()
+            prompt = _build_prompt(criteria, payload, feedback)
+            attempt_ok = False
+            attempt_error: str | None = None
+            try:
+                raw = complete(
+                    prompt, system=ENVELOPE_SYSTEM, model=candidate.model,
+                )
+                if isinstance(raw, dict):
+                    # Verify the RAW served identity (client.complete exposes it as
+                    # served_model, None when the backend omitted provenance); fall
+                    # back to model only for injected/legacy dicts. A missing or
+                    # differing identity fails closed so a hidden fallback or an
+                    # MLX model swap cannot be attributed to this candidate.
+                    served_model = raw.get("served_model", raw.get("model"))
+                    if served_model != candidate.model:
+                        raise LocalUnavailable(
+                            f"requested {candidate.model!r} but broker served "
+                            f"{served_model!r}"
+                        )
+                # A bare-string completion carries no provenance and only comes
+                # from a legacy/injected `complete=` adapter (the production path
+                # returns a dict, verified above). Such an adapter is called with
+                # model=candidate.model and has no broker indirection to mask a
+                # hidden fallback, so it is a TRUSTED-model contract: the caller is
+                # responsible for serving the model it was asked for. Provenance
+                # enforcement lives on the dict (real backend) path.
+            except Exception as exc:  # noqa: BLE001 — classified recovery attempt
+                error_kind = attempt_error = type(exc).__name__
+                feedback = f"model call failed: {error_kind}"
+                _emit_generation(
+                    task_type, "local", candidate.model, user,
+                    retries=attempts - 1, escalated=is_last, ok=False,
+                    duration_s=round(time.monotonic() - attempt_started, 3),
+                    error_kind=attempt_error,
+                )
+                continue
+            last_env = _parse_envelope(_completion_text(raw))
+            tokens_in, tokens_out = _completion_tokens(raw)
+            if verify is None:
                 ok = attempt_ok = True
             else:
-                error_kind = attempt_error = "verify_failed"
-                feedback = fb
-        _emit_generation(
-            task_type, "local", role, user,
-            retries=attempts - 1, escalated=(is_last and not attempt_ok), ok=attempt_ok,
-            duration_s=round(time.monotonic() - attempt_started, 3),
-            error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
-        )
-        if attempt_ok:
+                accepted, fb = verify(_as_text(last_env["output"]), criteria)
+                if accepted:
+                    ok = attempt_ok = True
+                else:
+                    error_kind = attempt_error = "verify_failed"
+                    feedback = fb
+            _emit_generation(
+                task_type, "local", candidate.model, user,
+                retries=attempts - 1, escalated=(is_last and not attempt_ok), ok=attempt_ok,
+                duration_s=round(time.monotonic() - attempt_started, 3),
+                error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
+            )
+            if attempt_ok:
+                # selected_model already tracks this candidate (set at loop top).
+                break
+        if ok:
+            compatibility.mark_compatible(job_id, selected_model)
             break
+        if error_kind == "verify_failed":
+            compatibility.block(
+                job_id,
+                candidate.model,
+                FailureKind.QUALITY,
+                feedback or "verification rejected every repair attempt",
+            )
 
     retries = attempts - 1
     escalated = not ok
@@ -397,7 +465,7 @@ def _run_local(
         "task.run",
         task_type=task_type,
         route="local",
-        model=role,
+        model=selected_model,
         user=user,
         retries=retries,
         escalated=escalated,
@@ -409,6 +477,7 @@ def _run_local(
         "task_type": task_type,
         "route": "local",
         "role": role,
+        "model": selected_model,
         "output": last_env["output"],
         "self_confidence": last_env.get("self_confidence"),
         "criteria_met": last_env.get("criteria_met"),

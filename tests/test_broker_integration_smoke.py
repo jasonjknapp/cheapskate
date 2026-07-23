@@ -118,6 +118,120 @@ def test_models_endpoint_200_with_valid_key_and_lists_roles(client):
     assert "role:reasoning" in ids
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        broker_app.BackendSpec(
+            model="remote", backend="remote",
+            endpoint="https://models.example.com/v1",
+        ),
+        broker_app.BackendSpec(
+            model="cloud", backend="cloud",
+            endpoint="http://127.0.0.1:9999/v1",
+        ),
+    ],
+)
+def test_broker_rechecks_never_cloud_against_live_resolution(
+    client, monkeypatch, spec
+):
+    before = len(client._fake.seen)
+    monkeypatch.setattr(broker_app, "resolve", lambda **_kwargs: spec)
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "role:reasoning", "messages": []},
+        headers={
+            "Authorization": "Bearer sk-test",
+            "X-Model-Privacy": "never_cloud",
+        },
+    )
+    assert response.status_code == 422
+    assert len(client._fake.seen) == before
+
+
+def test_never_cloud_refuses_task_type_cloud_route(client, monkeypatch):
+    """A never_cloud request whose task_type would route to cloud is refused
+    before any cloud dispatch — the task_type path bypasses _proxy_generation,
+    so it needs its own privacy gate."""
+    dispatched = []
+    monkeypatch.setattr(
+        broker_app, "plan_task_type_route",
+        lambda cfg, tt, **_k: {"action": "cloud", "decision": {"role": "reasoning"},
+                               "model": None},
+    )
+    monkeypatch.setattr(
+        broker_app, "cloud_dispatch_openai",
+        lambda *a, **k: dispatched.append(1) or (200, {"ok": True}),
+    )
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "role:reasoning", "task_type": "summarize", "messages": []},
+        headers={"Authorization": "Bearer sk-test", "X-Model-Privacy": "never_cloud"},
+    )
+    assert r.status_code == 422
+    assert dispatched == []  # never reached the cloud adapter
+
+
+def test_never_cloud_rechecks_prepared_endpoint_not_just_spec(client, monkeypatch):
+    """The pre-check spec passes local, but prepare_backend re-resolves to a
+    non-loopback base (registry race / MLX endpoint); the private prompt must be
+    refused against the ACTUAL dispatched URL, not the pre-check spec."""
+    local_spec = broker_app.BackendSpec(
+        model="test-model", backend="ollama", endpoint="http://127.0.0.1:11434/v1",
+    )
+    monkeypatch.setattr(broker_app, "resolve", lambda **_k: local_spec)
+    # prepare_backend returns a NON-loopback base despite the local pre-check spec.
+    monkeypatch.setattr(
+        broker_app, "prepare_backend",
+        lambda spec, budget, config=None: "http://backend.test/v1",
+    )
+    before = len(client._fake.seen)
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "role:reasoning", "messages": []},
+        headers={"Authorization": "Bearer sk-test", "X-Model-Privacy": "never_cloud"},
+    )
+    assert r.status_code == 422
+    assert len(client._fake.seen) == before  # nothing left the box
+
+
+def test_never_cloud_task_policy_enforced_without_header(monkeypatch):
+    """A task_type declared never_cloud in config is forced local, but its pinned
+    role can still resolve remote. The policy must enforce never_cloud even when
+    the client sends no X-Model-Privacy header."""
+    cfg = _config_with_role()
+    object.__setattr__(cfg, "never_cloud", ["secrets"])
+    _register_key(cfg)
+    monkeypatch.setattr(broker_app, "enforce_capacity", lambda spec, budget: ("ok", "t"))
+    monkeypatch.setattr(
+        broker_app, "prepare_backend",
+        lambda spec, budget, config=None: "http://backend.test/v1",
+    )
+    monkeypatch.setattr(
+        broker_app, "plan_task_type_route",
+        lambda cfg, tt, **_k: {"action": "local",
+                               "decision": {"role": "reasoning"},
+                               "model": "role:reasoning"},
+    )
+    # The pinned role resolves to a REMOTE endpoint despite the local plan.
+    remote = broker_app.BackendSpec(
+        model="remote", backend="remote", endpoint="https://models.example.com/v1",
+    )
+    monkeypatch.setattr(broker_app, "resolve", lambda **_k: remote)
+
+    app = broker_app.build_app(cfg)
+    fake = _FakeBackendClient({"model": "remote", "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "x"}}]})
+    app.state.client = fake
+    tc = TestClient(app)
+    r = tc.post(
+        "/v1/chat/completions",
+        json={"model": "role:reasoning", "task_type": "secrets", "messages": []},
+        headers={"Authorization": "Bearer sk-test"},  # no X-Model-Privacy
+    )
+    assert r.status_code == 422
+    assert fake.seen == []  # nothing left the box
+
+
 def test_models_endpoint_rejects_missing_key_401_not_422(client):
     r = client.get("/v1/models")
     # The S3 bug made this 422 (FastAPI treated `request` as a missing query

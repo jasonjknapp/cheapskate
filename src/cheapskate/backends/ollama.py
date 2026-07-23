@@ -32,6 +32,13 @@ _LMS_BIN = os.environ.get("CHEAPSKATE_LMS_BIN", os.path.expanduser("~/.lmstudio/
 _SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(GB|MB)")
 
 
+def _normalize_model_name(name: str) -> str:
+    """Normalize only Ollama's implicit ``:latest`` tag."""
+    name = (name or "").strip()
+    leaf = name.rsplit("/", 1)[-1]
+    return name if ":" in leaf else f"{name}:latest"
+
+
 def _sum_gb(text: str) -> float:
     """Sum every ``<n> GB|MB`` token in ``ps`` output, normalized to GB."""
     total = 0.0
@@ -77,9 +84,9 @@ def ollama_model_resident(model: str, runner: Optional[Callable[[], str]] = None
     try:
         out = (runner or (lambda: subprocess.run(
             ["ollama", "ps"], capture_output=True, text=True, timeout=10).stdout))()
-        base = (model or "").split(":")[0]
+        wanted = _normalize_model_name(model)
         return any(
-            base and ln.split() and ln.split()[0].split(":")[0] == base
+            wanted and ln.split() and _normalize_model_name(ln.split()[0]) == wanted
             for ln in (out or "").splitlines()[1:]
         )
     except Exception:  # noqa: BLE001
@@ -95,9 +102,9 @@ def ollama_model_present(model: str, runner: Optional[Callable[[], str]] = None)
     try:
         out = (runner or (lambda: subprocess.run(
             ["ollama", "list"], capture_output=True, text=True, timeout=10).stdout))()
-        base = (model or "").split(":")[0]
+        wanted = _normalize_model_name(model)
         return any(
-            base and ln.split() and ln.split()[0].split(":")[0] == base
+            wanted and ln.split() and _normalize_model_name(ln.split()[0]) == wanted
             for ln in (out or "").splitlines()[1:]
         )
     except Exception:  # noqa: BLE001

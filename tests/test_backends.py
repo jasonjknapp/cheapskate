@@ -16,6 +16,7 @@ from cheapskate.backends.resolve import (
     infer_backend,
     port_of,
     resolve,
+    role_candidates,
 )
 
 
@@ -60,6 +61,101 @@ def test_resolve_unknown_model_infers_backend():
     spec = resolve(model="mystery:tag", config={"roles": {}})
     assert spec.backend == "ollama"
     assert spec.approx_gb is None
+
+
+def test_role_candidates_are_incumbent_fallback_rollback_and_skip_quarantine():
+    cfg = {"roles": {"reasoning": {
+        "model": "org/incumbent",
+        "backend": "mlx",
+        "fallback": "fallback:latest",
+        "rollback": ["org/rollback", "org/bad"],
+        "quarantine": ["org/bad"],
+    }}}
+    candidates = role_candidates("reasoning", config=cfg)
+    assert [spec.model for spec in candidates] == [
+        "org/incumbent", "fallback:latest", "org/rollback",
+    ]
+    assert [spec.backend for spec in candidates] == ["mlx", "ollama", "mlx"]
+
+
+def test_role_fallback_uses_broker_exact_model_route_metadata():
+    cfg = {"roles": {
+        "classification": {
+            "model": "local:latest", "backend": "ollama",
+            "fallback": "shared-model",
+        },
+        "remote-role": {
+            "model": "shared-model", "backend": "remote",
+            "endpoint": "https://models.example.com/v1",
+        },
+    }}
+    fallback = role_candidates("classification", config=cfg)[1]
+    assert fallback.backend == "remote"
+    assert fallback.endpoint == "https://models.example.com/v1"
+
+
+def test_resolve_uses_rollback_snapshot_backend_not_string_inference():
+    """H2: a retained rollback snapshot resolves to its stored backend/endpoint/
+    size, NOT string inference — a former lmstudio ``vendor/model`` would else be
+    mis-inferred as MLX and lose its endpoint."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/current", "backend": "mlx",
+        "rollback": ["vendor/former"],
+        "rollback_configs": {"vendor/former": {
+            "backend": "lmstudio",
+            "endpoint": "http://127.0.0.1:1234/v1",
+            "approx_gb": 12.0,
+        }},
+    }}}
+    spec = resolve(model="vendor/former", config=cfg)
+    assert spec.backend == "lmstudio"  # NOT mlx (the slash-infer default)
+    assert spec.endpoint == "http://127.0.0.1:1234/v1"
+    assert spec.approx_gb == 12.0
+    assert spec.role == "reasoning"
+
+
+def test_role_candidates_carry_rollback_snapshot_spec():
+    """H2: the single-point snapshot resolution is inherited by role_candidates()."""
+    cfg = {"roles": {"reasoning": {
+        "model": "org/current", "backend": "mlx",
+        "rollback": ["vendor/former"],
+        "rollback_configs": {"vendor/former": {
+            "backend": "lmstudio",
+            "endpoint": "http://127.0.0.1:1234/v1",
+            "approx_gb": 12.0,
+        }},
+    }}}
+    candidates = role_candidates("reasoning", config=cfg)
+    former = next(c for c in candidates if c.model == "vendor/former")
+    assert former.backend == "lmstudio"
+    assert former.endpoint == "http://127.0.0.1:1234/v1"
+
+
+def test_live_incumbent_wins_over_rollback_snapshot():
+    """H2: a live incumbent match always wins over a stale snapshot for the same
+    model — stale metadata never shadows live state."""
+    cfg = {"roles": {
+        "reasoning": {"model": "shared/model", "backend": "mlx"},
+        "code": {
+            "model": "org/coder", "backend": "ollama",
+            "rollback": ["shared/model"],
+            "rollback_configs": {"shared/model": {
+                "backend": "lmstudio", "endpoint": "http://127.0.0.1:1234/v1",
+            }},
+        },
+    }}
+    spec = resolve(model="shared/model", config=cfg)
+    assert spec.backend == "mlx"  # live reasoning incumbent, not the code snapshot
+    assert spec.role == "reasoning"
+
+
+def test_resolve_no_snapshot_falls_back_to_string_inference():
+    """H2 back-compat: a model in no ``rollback_configs`` still infers by string
+    (older registries / hand-edited entries)."""
+    cfg = {"roles": {"reasoning": {"model": "org/current", "backend": "mlx"}}}
+    spec = resolve(model="vendor/former", config=cfg)
+    assert spec.backend == "mlx"  # slash → MLX inference, no snapshot present
+    assert spec.role is None
 
 
 def test_resolve_config_backend_endpoint_override():
@@ -261,10 +357,33 @@ def test_ollama_resident_gb_parses_sizes():
     assert round(total, 2) == round(12 + 512 / 1024, 2)
 
 
-def test_ollama_model_resident_matches_base_name():
-    fake_ps = "NAME SIZE\nllama3:70b 40 GB\n"
-    assert ollamamod.ollama_model_resident("llama3", runner=lambda: fake_ps) is True
+def test_ollama_model_resident_matches_exact_normalized_tag():
+    fake_ps = "NAME SIZE\nllama3:70b 40 GB\ndefaulted:latest 8 GB\n"
+    assert ollamamod.ollama_model_resident("llama3:70b", runner=lambda: fake_ps) is True
+    assert ollamamod.ollama_model_resident("llama3:8b", runner=lambda: fake_ps) is False
+    assert ollamamod.ollama_model_resident("defaulted", runner=lambda: fake_ps) is True
+    assert ollamamod.ollama_model_resident("llama3", runner=lambda: fake_ps) is False
     assert ollamamod.ollama_model_resident("mistral", runner=lambda: fake_ps) is False
+
+
+def test_oversized_sibling_tag_cannot_bypass_broker_capacity(monkeypatch):
+    from cheapskate.broker import app as broker_app
+
+    fake_ps = "NAME SIZE\nqwen3:8b 5 GB\n"
+    monkeypatch.setattr(broker_app, "lms_loaded", lambda: False)
+    monkeypatch.setattr(broker_app, "ollama_resident_gb", lambda: 5.0)
+    monkeypatch.setattr(
+        broker_app,
+        "ollama_model_resident",
+        lambda model: ollamamod.ollama_model_resident(model, runner=lambda: fake_ps),
+    )
+    spec = BackendSpec(
+        model="qwen3:30b", backend="ollama",
+        endpoint="http://127.0.0.1:11434", approx_gb=120.0,
+    )
+
+    with pytest.raises(RuntimeError, match="503"):
+        broker_app.enforce_capacity(spec, budget_gb=100.0)
 
 
 def test_lms_loaded_detects_no_models():
@@ -273,8 +392,20 @@ def test_lms_loaded_detects_no_models():
 
 
 def test_ollama_model_present_reads_ollama_list():
-    fake_list = "NAME\t\tID\t\tSIZE\nqwen3-coder:30b\tabc\t18 GB\n"
-    assert ollamamod.ollama_model_present("qwen3-coder", runner=lambda: fake_list) is True
+    fake_list = (
+        "NAME\t\tID\t\tSIZE\n"
+        "qwen3-coder:30b\tabc\t18 GB\n"
+        "defaulted:latest\tdef\t8 GB\n"
+    )
+    assert ollamamod.ollama_model_present(
+        "qwen3-coder:30b", runner=lambda: fake_list
+    ) is True
+    assert ollamamod.ollama_model_present(
+        "qwen3-coder", runner=lambda: fake_list
+    ) is False
+    assert ollamamod.ollama_model_present(
+        "defaulted", runner=lambda: fake_list
+    ) is True
     assert ollamamod.ollama_model_present("mistral", runner=lambda: fake_list) is False
 
 
@@ -324,7 +455,14 @@ def test_default_roles_shape():
         assert isinstance(rc["approx_gb"], float) and rc["approx_gb"] > 0
     # the specific reference fleet is shipped
     assert dr["code"]["model"] == "qwen3-coder:30b"
-    assert dr["classification"]["backend"] == "mlx"
+    assert dr["classification"]["backend"] == "ollama"
+
+
+def test_classification_default_resolves_to_ollama_runtime():
+    spec = resolve(role="classification", config={"roles": {}})
+    assert spec.model == "qwen3.5:9b-mlx"
+    assert spec.backend == "ollama"
+    assert spec.endpoint.endswith(":11434")
 
 
 def test_resolve_falls_back_to_default_when_config_and_registry_empty():

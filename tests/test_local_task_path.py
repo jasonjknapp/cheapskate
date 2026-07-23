@@ -116,7 +116,9 @@ def test_d5_local_run_records_token_counts(_quiet_telemetry):
             "prompt_eval_count": 42, "eval_count": 17}
     task.run(
         "summarize", "crit", "data", cfg, dial=(3, None),
-        complete=lambda *a, **k: rich,
+        # A compliant backend echoes the served model identity; the router now
+        # fails closed on a dict completion that omits it (attribution safety).
+        complete=lambda *a, **k: {**rich, "model": k.get("model")},
     )
     # find the generation event that carried the token counts
     tokened = [k for (a, k) in _quiet_telemetry if k.get("tokens_in") == 42]

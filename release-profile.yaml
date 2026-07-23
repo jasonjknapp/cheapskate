@@ -1,0 +1,45 @@
+# release-profile.yaml — jasonjknapp/cheapskate
+# Schema: ~/.agents/docs/runbooks/release-profile-schema.md (v1.1).
+
+repo: cheapskate
+github_org: jasonjknapp
+git_email: jason@craftedpour.com
+project_category: personal
+platform_type: local_scripts
+
+build_command: null
+test_command: PYTHONPATH=src /Users/jason/dev/Personal/cheapskate/.venv/bin/python -m pytest -p no:cacheprovider tests/ -q
+
+integration_branch: main
+release_branch: main
+
+staging:
+  method: build_verification_only
+  project_id: null
+  deploy_command: null
+  url: null
+
+production:
+  deploy_trigger: local_checkout
+  deploy_command: null
+  project_id: null
+  verify_urls: []
+  backup:
+    firestore: false
+    bucket: null
+    project_id: null
+
+has_schema_registry: false
+schema_graph_path: null
+has_compliance_framework: false
+
+gca_gate:
+  required: false
+  script: null
+
+auto_chain: false
+post_merge_script: null
+archive_copy_path: null
+requires_version_inventory_check: false
+xcode_cloud_enabled: false
+approval_gate: build_verification
