@@ -1,8 +1,8 @@
 <!-- PLAN-STATE v1 -->
 current_phase: release-prep
 phase_status: in_progress
-last_commit:  2d3af4bd309aea9815c416d5bbaaaa32696a9b8e
-next_action:  Broker privacy + exact-attribution patch committed and green (407 passed, Ruff clean). Restart two fresh clean adversarial reviews on this SHA, then PR/staging gates.
+last_commit:  b80377e0af97ff2107ce88b05db68c9c6127fb5f
+next_action:  Sol R1 found 5 real findings; ALL fixed at b80377e (411 pass, Ruff clean). R2 fresh review running; drive to 2 consecutive cleans, then PR/staging gates.
 -->
 
 # Global Model Self-Healing

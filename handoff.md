@@ -1,6 +1,16 @@
 # Cheapskate Handoff
 
-> **Last updated: 2026-07-23** (`feature/model-self-healing`, `2d3af4b`) — privacy/attribution patch committed and green; paused before the release gate. No PR, push, merge, deployment, model installation, or deletion occurred.
+> **Last updated: 2026-07-23** (`feature/model-self-healing`, `b80377e`) — privacy/attribution patch committed + green; **Sol adversarial R1 found 5 real findings (2 P1 blockers, 2 P1 majors, 1 minor), ALL fixed at `b80377e`** (411 pass, Ruff clean); R2 fresh review running. No PR, push, merge, deployment, model installation, or deletion occurred.
+
+## 🛡️ Adversarial review log
+- **R1 (Sol `gpt-5.6-sol`, base main, 2026-07-23):** NOT clean. Findings + fixes at `b80377e`:
+  - F1 [P1] task_type cloud route bypassed the privacy gate → broker now refuses cloud action under `never_cloud` (422) in `_route_task_type`.
+  - F2 [P1] pre-check spec ≠ dispatched endpoint (prepare_backend re-resolves) → broker re-verifies `never_cloud` against the actual prepared base URL.
+  - F3 [P1-major] `generate_json` role path didn't verify served-model identity → fails closed on mismatch; `complete()` exposes raw `served_model`.
+  - F4 [P1-major] router accepted missing provenance (complete substituted requested model) → fails closed on missing/mismatched `served_model`.
+  - F5 [minor] exhausted run attributed to incumbent → now attributes to the last model tried.
+  - Tests added: F1/F2 (broker smoke), F3 (client), F5 (task); F4 covered by updated token-count + existing mismatch tests.
+- **R2:** running (fresh Sol, base main, on `b80377e`).
 
 ## 📌 Current State
 
