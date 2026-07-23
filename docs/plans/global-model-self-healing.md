@@ -1,8 +1,8 @@
 <!-- PLAN-STATE v1 -->
 current_phase: release-prep
 phase_status: in_progress
-last_commit:  a549fd96d2a4d9fce3e183c47b5223f9dfe57afd
-phase_status: release-prep
+last_commit:  91259e7d9c31282965a5a854557605ebefbd07fa
+phase_status: reescalated_round5
 next_action:  JASON chose SCOPE A. Scope-A cleanup done at a549fd9 (420 pass, Ruff clean): R4-4 fixed, R4-1 documented, lifecycle findings deferred to docs/specs/self-healing-lifecycle-hardening.md. R5 scoped review running; need R5+R6 clean → push + PR → STOP at exit gate.
 -->
 
