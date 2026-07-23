@@ -86,6 +86,7 @@ def _post_chat(
     temperature: float,
     timeout: float,
     response_json: bool,
+    privacy: str,
     config: Any,
     api: Optional[Any] = None,
 ) -> dict:
@@ -116,6 +117,7 @@ def _post_chat(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {key}",
         "X-Cheapskate-Internal": "1",
+        "X-Model-Privacy": privacy,
     }
 
     client = api or httpx.Client(timeout=timeout)
@@ -203,7 +205,7 @@ def complete(
             candidate_body = _post_chat(
                 messages, model=candidate_model, role=candidate_role,
                 temperature=temperature, timeout=timeout,
-                response_json=False, config=config, api=api,
+                response_json=False, privacy=privacy, config=config, api=api,
             )
             candidate_text = _content(candidate_body)
             body, text = candidate_body, candidate_text
@@ -324,6 +326,24 @@ def _never_cloud_route_is_local(*, model: str | None, role: str | None, config: 
     return _serving_spec_is_local(spec)
 
 
+def _never_cloud_role_has_local_candidate(role: str, config: Any) -> bool:
+    """True only when the broker is loopback and the role offers at least one
+    known-local serving candidate. A role whose incumbent and every fallback
+    resolve to a nonlocal backend has no verified local route, so never_cloud
+    must refuse it up front rather than surface a generic no-model error."""
+    if not _endpoint_is_local(_broker_base(config)):
+        return False
+    try:
+        from .backends.resolve import role_candidates
+
+        return any(
+            _serving_spec_is_local(spec)
+            for spec in role_candidates(role, config=config)
+        )
+    except Exception:  # noqa: BLE001 - unknown provenance fails closed
+        return False
+
+
 def generate_json(
     prompt: str,
     *,
@@ -349,13 +369,24 @@ def generate_json(
     ``retries`` times. Raises :class:`CheapskateUnavailable` on a hard failure or
     if still invalid after the retries. NEVER falls back to cloud.
     """
-    if privacy == "never_cloud" and not _never_cloud_route_is_local(
-        model=model, role=role, config=config,
-    ):
-        raise CheapskateUnavailable(
-            "never_cloud requires a verified local backend with loopback broker "
-            "and serving endpoints"
-        )
+    if privacy == "never_cloud":
+        # A role request may have a nonlocal incumbent but a valid installed
+        # local fallback. Prove the broker hop plus at least one local role
+        # candidate here; the self-healing fleet and invoke-time guard prove
+        # each concrete candidate below.
+        if model is not None:
+            route_is_valid = _never_cloud_route_is_local(
+                model=model, role=None, config=config,
+            )
+        elif role is not None:
+            route_is_valid = _never_cloud_role_has_local_candidate(role, config)
+        else:
+            route_is_valid = False
+        if not route_is_valid:
+            raise CheapskateUnavailable(
+                "never_cloud requires a verified local backend with loopback "
+                "broker and serving endpoints"
+            )
     validator = _schema_format(schema)
     sys_msg = ((system or "") + "\nReturn ONLY valid JSON matching the required schema.").strip()
     base_messages = [
@@ -432,6 +463,7 @@ def generate_json(
                 temperature=temperature,
                 timeout=timeout,
                 response_json=True,
+                privacy=privacy,
                 config=config,
                 api=api,
             )
@@ -455,7 +487,7 @@ def generate_json(
                 body = _post_chat(
                     messages, model=candidate, role=None if candidate else role,
                     temperature=temperature, timeout=timeout, response_json=True,
-                    config=config, api=api,
+                    privacy=privacy, config=config, api=api,
                 )
                 text = _content(body)
                 return parse_response(text)

@@ -69,7 +69,7 @@ def test_verify_repair_then_succeed():
     cfg = Config()
     attempts = []
 
-    def complete(prompt, system=None, role=None):
+    def complete(prompt, system=None, role=None, model=None):
         attempts.append(prompt)
         return _envelope("attempt")
 
@@ -93,7 +93,7 @@ def test_escalates_after_two_retries():
     cfg = Config()
     n = {"complete": 0}
 
-    def complete(prompt, system=None, role=None):
+    def complete(prompt, system=None, role=None, model=None):
         n["complete"] += 1
         return _envelope("nope")
 
@@ -130,7 +130,7 @@ def test_local_job_repairs_then_switches_to_role_fallback():
 
     def complete(prompt, system=None, role=None, model=None):
         calls.append((role, model))
-        if role == "reasoning":
+        if model == "org/incumbent":
             return _envelope("bad")
         return _envelope("good")
 
@@ -143,10 +143,27 @@ def test_local_job_repairs_then_switches_to_role_fallback():
     assert res["ok"] is True
     assert res["model"] == "fallback:latest"
     assert calls == [
-        ("reasoning", None),
-        ("reasoning", None),
+        (None, "org/incumbent"),
+        (None, "org/incumbent"),
         (None, "fallback:latest"),
     ]
+
+
+def test_local_job_rejects_broker_model_identity_mismatch():
+    cfg = Config(roles={"reasoning": {
+        "model": "org/incumbent", "backend": "mlx",
+    }})
+
+    result = task.run(
+        "summarize", "crit", "data", cfg, dial=(2, "std"),
+        complete=lambda *a, **k: {
+            "text": _envelope("looks valid"), "model": "hidden-fallback",
+        },
+        verify=lambda out, crit: (True, ""), max_retries=0,
+    )
+    assert result["ok"] is False
+    assert result["model"] == "org/incumbent"
+    assert result["error_kind"] == "LocalUnavailable"
 
 
 def test_exhausted_local_run_emits_exactly_one_escalated_generation(monkeypatch):

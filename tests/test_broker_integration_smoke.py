@@ -118,6 +118,36 @@ def test_models_endpoint_200_with_valid_key_and_lists_roles(client):
     assert "role:reasoning" in ids
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        broker_app.BackendSpec(
+            model="remote", backend="remote",
+            endpoint="https://models.example.com/v1",
+        ),
+        broker_app.BackendSpec(
+            model="cloud", backend="cloud",
+            endpoint="http://127.0.0.1:9999/v1",
+        ),
+    ],
+)
+def test_broker_rechecks_never_cloud_against_live_resolution(
+    client, monkeypatch, spec
+):
+    before = len(client._fake.seen)
+    monkeypatch.setattr(broker_app, "resolve", lambda **_kwargs: spec)
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "role:reasoning", "messages": []},
+        headers={
+            "Authorization": "Bearer sk-test",
+            "X-Model-Privacy": "never_cloud",
+        },
+    )
+    assert response.status_code == 422
+    assert len(client._fake.seen) == before
+
+
 def test_models_endpoint_rejects_missing_key_401_not_422(client):
     r = client.get("/v1/models")
     # The S3 bug made this 422 (FastAPI treated `request` as a missing query

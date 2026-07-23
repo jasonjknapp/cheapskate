@@ -381,10 +381,16 @@ def _run_local(
             attempt_ok = False
             attempt_error: str | None = None
             try:
-                if candidate_index == 0:
-                    raw = complete(prompt, system=ENVELOPE_SYSTEM, role=role)
-                else:
-                    raw = complete(prompt, system=ENVELOPE_SYSTEM, model=candidate.model)
+                raw = complete(
+                    prompt, system=ENVELOPE_SYSTEM, model=candidate.model,
+                )
+                if isinstance(raw, dict):
+                    served_model = raw.get("model")
+                    if served_model and served_model != candidate.model:
+                        raise LocalUnavailable(
+                            f"requested {candidate.model!r} but broker served "
+                            f"{served_model!r}"
+                        )
             except Exception as exc:  # noqa: BLE001 — classified recovery attempt
                 error_kind = attempt_error = type(exc).__name__
                 feedback = f"model call failed: {error_kind}"
@@ -413,11 +419,7 @@ def _run_local(
                 error_kind=attempt_error, tokens_in=tokens_in, tokens_out=tokens_out,
             )
             if attempt_ok:
-                selected_model = (
-                    raw.get("model", candidate.model)
-                    if isinstance(raw, dict)
-                    else candidate.model
-                )
+                selected_model = candidate.model
                 break
         if ok:
             compatibility.mark_compatible(job_id, selected_model)

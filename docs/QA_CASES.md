@@ -4,6 +4,8 @@
 
 - A schema-invalid but responsive model is classified as a schema incompatibility, not an outage.
 - A job retries one repair on its current model, then switches to a compatible installed model.
+- A nonlocal incumbent does not block a `never_cloud` job from selecting an
+  installed, exact-route-verified local fallback.
 - Incompatibility is scoped to the job and model; the same model remains eligible for other jobs.
 - A `never_cloud` job requires positively local endpoint provenance; a remote URL remains rejected even when its backend label says Ollama or MLX.
 - A `never_cloud` job also requires a loopback broker URL for role and explicit-model calls; a remote broker is rejected before any HTTP request.
@@ -11,6 +13,10 @@
 - A fallback model name shared with another role uses the broker's exact-model
   route metadata; ambiguous remote/cloud resolution is rejected before HTTP.
 - Unstructured `complete()` calls and the router's production default completion path enforce the same fail-closed `never_cloud` proof before HTTP.
+- The client transmits the privacy contract and the broker rechecks it against
+  its own live resolution; config drift or a promotion race cannot egress.
+- Router attempts target one exact model, and a mismatched served-model identity
+  fails rather than corrupting telemetry or job-scoped quarantine attribution.
 - If installed candidates are exhausted, the engine installs and tries the highest-ranked compatible discovery candidate.
 - Discovery is global rather than publisher-allowlisted, with strong release-recency weighting.
 - Promotion remains eval-gated; discovery popularity never overrides a failed local quality floor.

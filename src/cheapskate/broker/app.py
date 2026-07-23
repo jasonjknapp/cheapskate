@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 # ``Request`` must be resolvable in THIS module's globals at route-registration
 # time: with ``from __future__ import annotations`` a route's ``request: Request``
@@ -58,6 +59,7 @@ DEFAULT_HOST = "127.0.0.1"
 # and return EMPTY content; floor any chat request that OMITS max_tokens so a
 # thinking model has room to think AND answer. Explicit values are respected.
 DEFAULT_MAX_TOKENS_FLOOR = 4096
+_LOCAL_SERVING_BACKENDS = frozenset({"ollama", "mlx", "mlx_vlm", "lmstudio"})
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -66,6 +68,17 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _never_cloud_spec_is_local(spec: BackendSpec) -> bool:
+    try:
+        host = urlparse(str(spec.endpoint)).hostname
+    except ValueError:
+        return False
+    return (
+        spec.backend in _LOCAL_SERVING_BACKENDS
+        and host in {"localhost", "127.0.0.1", "::1"}
+    )
 
 
 def _broker_cfg(config: Any) -> dict:
@@ -460,6 +473,14 @@ def build_app(config: Any = None):
         except Exception as e:  # noqa: BLE001
             return JSONResponse(
                 {"error": f"model resolution failed: {e}"}, status_code=400
+            )
+        privacy = request.headers.get("x-model-privacy", "cloud_allowed")
+        if privacy not in {"never_cloud", "cloud_allowed"}:
+            return JSONResponse({"error": "invalid privacy constraint"}, status_code=400)
+        if privacy == "never_cloud" and not _never_cloud_spec_is_local(spec):
+            return JSONResponse(
+                {"error": "never_cloud route is not a verified local backend"},
+                status_code=422,
             )
 
         # Thinking-model floor: a chat request that omits max_tokens would inherit

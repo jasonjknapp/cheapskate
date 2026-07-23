@@ -71,6 +71,7 @@ def test_complete_returns_text_and_metadata(registered_key):
     assert req["headers"]["Authorization"] == f"Bearer {registered_key}"
     # D8: the internal marker so the broker does not double-count this call in econ.
     assert req["headers"]["X-Cheapskate-Internal"] == "1"
+    assert req["headers"]["X-Model-Privacy"] == "never_cloud"
 
 
 def test_complete_role_fails_over_to_registered_fallback(registered_key):
@@ -275,6 +276,32 @@ def test_generate_json_repairs_then_switches_role_fallback(registered_key, monke
     assert [req["json"]["model"] for req in api.requests] == [
         "org/incumbent", "org/incumbent", "fallback:latest",
     ]
+
+
+def test_generate_json_skips_remote_incumbent_for_local_fallback(
+    registered_key, monkeypatch
+):
+    cfg = {"roles": {"classification": {
+        "model": "remote-incumbent", "backend": "remote",
+        "endpoint": "https://models.example.com/v1",
+        "fallback": "local:latest",
+        "capabilities": ["text", "classification", "json"],
+    }}}
+    api = FakeClient([
+        FakeResponse(200, _chat_body('{"ok": true}', model="local:latest")),
+    ])
+    monkeypatch.setattr(
+        client, "_candidate_installed",
+        lambda spec: spec.model == "local:latest",
+    )
+
+    out = client.generate_json(
+        "q", role="classification", config=cfg, api=api,
+        required_capabilities={"classification", "json"}, retries=0,
+        privacy="never_cloud",
+    )
+    assert out == {"ok": True}
+    assert [req["json"]["model"] for req in api.requests] == ["local:latest"]
 
 
 def test_generate_json_rejects_undeclared_requested_capability(registered_key, monkeypatch):
