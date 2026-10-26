@@ -34,8 +34,8 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
-# The server uses FastMCP from the v1 SDK; v2 removed that API.
-mcp = ["mcp>=1.0,<2.0"]
+# FastMCP is the v1 API; 1.30.0 is the tested compatibility floor.
+mcp = ["mcp>=1.30,<2.0"]
 # Test + dev tooling as an INSTALLABLE extra so a bare clone can run
 # ``pip install -e .[dev]`` and get a green suite + lint without a separate
 # dependency manager. Mirrors the [dependency-groups] dev set for uv users.
